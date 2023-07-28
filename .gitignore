@@ -1,0 +1,9 @@
+__pycache__/
+dist/
+*.egg-info
+test/
+*_kernels/
+*lightning_logs/
+*lightning_root/
+*.ipynb
+.vscode/
