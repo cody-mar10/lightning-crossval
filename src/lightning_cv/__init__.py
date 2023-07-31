@@ -6,6 +6,7 @@ from . import (
     module,
     split,
     trainer,
+    tuning,
     utils,
 )
 from .config import CrossValidationTrainerConfig
@@ -24,6 +25,7 @@ __all__ = [
     "module",
     "split",
     "trainer",
+    "tuning",
     "utils",
     "CrossValidationTrainerConfig",
     "CrossValidationDataModule",
