@@ -14,10 +14,8 @@ from lightning_utilities.core.apply_func import apply_to_collection
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 
-from ._typing import (  # noqa
+from ._typing import (
     ConfigOptimizerOutput,
-    ForwardOutputType,
-    KwargType,
     MetricType,
     ModelT,
     Number,
