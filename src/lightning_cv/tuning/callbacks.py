@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import cast
 
 import optuna
@@ -126,3 +128,22 @@ class TrialPruning(lcv.callbacks.Callback):
             msg.append(f"with parameters {self._trial.params}")
 
         return " ".join(msg)
+
+
+class OptunaHyperparameterLogger:
+    def __init__(
+        self,
+        root_dir: Path,
+        logfile: str = "sampled_hparams.json",
+    ):
+        self.root_dir = root_dir
+        self.logfile = logfile
+
+    def __call__(self, study: optuna.Study, trial: optuna.trial.FrozenTrial):
+        trial_id = trial.number
+        expt_name = study.study_name
+        logdir = self.root_dir / expt_name / f"version_{trial_id}"
+        logfile = logdir.joinpath(self.logfile)
+        with logfile.open("w") as fp:
+            json.dump(trial.params, fp, indent=4)
+            fp.write("\n")
