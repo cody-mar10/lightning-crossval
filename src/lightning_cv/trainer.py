@@ -423,6 +423,7 @@ class CrossValidationTrainer(Generic[ModelT, ModelConfig]):
         possible_monitor_vals = flatten_train_val_metrics(
             train_metrics=self.current_train_metrics,
             val_metrics=self.current_val_metrics,
+            prepend_stage=True,
         )
 
         try:
