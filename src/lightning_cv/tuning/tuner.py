@@ -8,7 +8,7 @@ from typing import Any, Callable, Generic, Optional
 import optuna
 from lightning.fabric.loggers.csv_logs import CSVLogger
 
-from lightning_cv import CrossValidationTrainer, CrossValidationTrainerConfig
+import lightning_cv as lcv
 from lightning_cv._typing import ModelConfig, ModelT
 from lightning_cv.callbacks import Callback
 from lightning_cv.trainer import DataModuleType
@@ -24,7 +24,7 @@ class Tuner(Generic[ModelT, ModelConfig]):
         model_type: type[ModelT],
         model_config: ModelConfig,
         datamodule: DataModuleType,
-        trainer_config: CrossValidationTrainerConfig,
+        trainer_config: "lcv.CrossValidationTrainerConfig",
         logdir: str | Path = Path("checkpoints"),
         experiment_name: str = "exp0",
         clean_logdir_if_exists: bool = False,
@@ -95,7 +95,7 @@ class Tuner(Generic[ModelT, ModelConfig]):
         )
 
         self.trainer_config.callbacks = callbacks
-        trainer = CrossValidationTrainer(
+        trainer = lcv.CrossValidationTrainer(
             model_type=self.model_type, config=self.trainer_config
         )
 
