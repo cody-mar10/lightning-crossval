@@ -3,10 +3,11 @@ from __future__ import annotations
 from copy import copy
 from pathlib import Path
 from shutil import rmtree
-from typing import Any, Callable, Generic, Optional
+from typing import Any, Callable, Generic, Optional, cast
 
 import optuna
 from lightning.fabric.loggers.csv_logs import CSVLogger
+from lightning.fabric.loggers.logger import Logger
 
 import lightning_cv as lcv
 from lightning_cv._typing import ModelConfig, ModelT
@@ -44,11 +45,7 @@ class Tuner(Generic[ModelT, ModelConfig]):
         self.trainer_config = trainer_config
 
         self._callbacks = self._store_callbacks(self.trainer_config.callbacks)
-
-        # ignore whatever logger they were using <- this needs to be created each trial
-        # TODO: just reuse their info but change the version_no
-        self.trainer_config.loggers = None
-        # self._add_trial_pruning_callback(trainer_config)
+        self._logger_types = self._store_logger_types(self.trainer_config.loggers)
 
     def _init_logdir(self, logdir: str | Path, clean_logdir_if_exists: bool = False):
         if isinstance(logdir, str):
@@ -78,16 +75,33 @@ class Tuner(Generic[ModelT, ModelConfig]):
 
         return callbacks
 
-    # def _add_trial_pruning_callback(self, config: CrossValidationTrainerConfig):
-    #     trial_pruning = TrialPruning()
-    #     if config.callbacks is None
+    def _store_logger_types(
+        self, loggers: Optional[list[Logger] | Logger]
+    ) -> list[type[Logger]]:
+        # capture logger types only and reconstruct during tuning
+        if loggers is not None:
+            if not isinstance(loggers, list):
+                logger_types = [type(loggers)]
+            else:
+                logger_types = [type(logger) for logger in loggers]
+        else:
+            logger_types = cast(list[type[Logger]], [CSVLogger])
+
+        return logger_types
 
     def tune(
         self, trial: optuna.Trial, func: TrialSuggestionFn, monitor: str = "loss"
     ) -> float:
-        CSVLogger(
-            root_dir=self.logdir, name=self.experiment_name, version=self.trial_number
-        )
+        loggers = [
+            logger_type(  # type: ignore
+                root_dir=self.logdir,
+                name=self.experiment_name,
+                version=self.trial_number,
+            )
+            for logger_type in self._logger_types
+        ]
+
+        self.trainer_config.loggers = loggers
 
         callbacks = copy(self._callbacks)
         callbacks.append(
@@ -95,11 +109,11 @@ class Tuner(Generic[ModelT, ModelConfig]):
         )
 
         self.trainer_config.callbacks = callbacks
+
         trainer = lcv.CrossValidationTrainer(
             model_type=self.model_type, config=self.trainer_config
         )
 
-        # TODO:
         # suggest values here
         trialed_values = func(trial)
 
@@ -108,9 +122,13 @@ class Tuner(Generic[ModelT, ModelConfig]):
             self.model_config | trialed_values
         )
 
-        trainer.train_with_cross_validation(
-            datamodule=self.datamodule, model_config=model_config
-        )
+        try:
+            trainer.train_with_cross_validation(
+                datamodule=self.datamodule, model_config=model_config
+            )
+        except optuna.TrialPruned as err:
+            # TODO: add optional pruning hook
+            raise err
 
         self.trial_number += 1
 
