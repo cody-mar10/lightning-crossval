@@ -24,3 +24,7 @@ dependencies = [
 [project.urls]
 "Homepage" = "https://github.com/cody-mar10/lightning-crossval"
 "Bug Tracker" = "https://github.com/cody-mar10/lightning-crossval/issues"
+
+[tool.ruff]
+src = ["src"]
+line-length = 90
