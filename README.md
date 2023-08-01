@@ -259,7 +259,7 @@ class CrossValidationTrainer:
     ):  
         self.model_type
         self.config = config
-        self.fabric = L.Fabric(self.config.dict(include=self.__fabric_keys__))
+        self.fabric = L.Fabric(**self.config.dict(include=self.__fabric_keys__))
 
         # other init logic
 
