@@ -65,6 +65,9 @@ for epoch in range(epochs):
     per_fold_loss.fill_(0.0) 
 ```
 
+<details>
+  <summary>Details</summary>
+
 ## Fold Synchronization
 Notably, this cross validation scheme **synchronizes all model folds at the epoch-level**. Unfortunately, this requires *k*-fold models to be held in memory simultaneously, which might be prohibitive for extremely large models. While looping over the training folds in the outermost loop could be optionally added and reduce the memory footprint, the current cross validation scheme offers greater flexibility.
 
@@ -77,8 +80,12 @@ A more explicit way to state this is that each training fold is not necessarily 
 
 The exception to this rule is when current performance is read without causing any meaningful updates. This occurs during metric logging and when a progress bar is used.
 
-# Usage
-## Data
+</details>
+
+## Usage
+<details>
+  <summary>Data</summary>
+
 The biggest change that needs to be made to existing workflows is to use a `lightning.LightningDataModule` subclass that has the method `train_val_dataloaders`. This method yields the train/val splits of the original dataset.
 
 Convenience classes have been provided by this library:
@@ -126,8 +133,10 @@ class _CrossValidationDataModule(L.LightningDataModule):
             # actual impl depends on original dataset
             yield train_loader, val_loader
 ```
+</details>
 
-## Model
+<details>
+  <summary>Model</summary>
 
 The model requirements are: 
 
@@ -176,8 +185,10 @@ class MyModel(CrossValModule):
         super().__init__(...) 
         # custom init logic here
 ```
+</details>
 
-## Training
+<details>
+  <summary>Training</summary>
 
 ### Config
 The `CrossValidationTrainer` can *only* be instantiated with a `pydantic` config model. `pydantic` models provide automatic type validation and safety guarantees that are useful for general purpose computing.
@@ -311,7 +322,10 @@ class ModelSummary(lcv.callbacks.Callback):
 
 Then, any custom callbacks can be passed to the `callbacks` argument of the `CrossValidationTrainerConfig`.
 
-## Minimal cross validation reference
+</details>
+
+<details>
+  <summary>Minimal cross validation reference</summary>
 
 ```python
 from lightning_cv import (
@@ -355,8 +369,11 @@ trainer.train_with_cross_validation(
     model_config=model_config
 )
 ```
+</details>
 
-## Tuning
+<details>
+  <summary>Tuning</summary>
+
 Currently, there is a simple integration for [optuna](https://optuna.readthedocs.io/en/stable/), a machine learning hyperparameter tuning library.
 
 Here is a simple example that uses the provided `Tuner` class to setup tuning runs. Suppose you want to tune the learning rate:
@@ -442,3 +459,5 @@ The only public method the `Tuner` class has is the `tune` method. This method f
 Then, the tuner sets up a trainer instance and calls the `train_with_cross_validation_method` with the datamodule. If the method finishes and is not pruned due to an unpromising trial, then the `.tune` method returns a monitored validation metric, such as the validation loss, averaged over all folds.
 
 This validation metric is reported to the `optuna.Study` object, which then keeps track of the best run.
+
+</details>
