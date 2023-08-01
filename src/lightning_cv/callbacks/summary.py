@@ -3,9 +3,10 @@ from __future__ import annotations
 import sys
 from typing import cast
 
-import lightning_cv as lcv
 from lightning import LightningModule
 from lightning.pytorch.utilities.model_summary.model_summary import summarize
+
+import lightning_cv as lcv
 
 from .callbacks import Callback
 
