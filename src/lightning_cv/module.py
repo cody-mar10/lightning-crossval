@@ -46,8 +46,8 @@ class CrossValModuleMixin(Generic[ModelConfig]):
 
 class CrossValModule(CrossValModuleMixin, LightningModule, Generic[ModelConfig]):
     def __init__(self, config: ModelConfig):
-        CrossValModuleMixin.__init__(self, config)
         LightningModule.__init__(self)
+        CrossValModuleMixin.__init__(self, config)
 
     # change signature since validation_step is required
     def validation_step(self, *args, **kwargs) -> STEP_OUTPUT:
