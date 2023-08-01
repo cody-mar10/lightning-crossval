@@ -60,7 +60,9 @@ for epoch in range(epochs):
     #   3. early stopping
     #   4. make use of a scheduler
     report(current_val_loss)
-            
+
+    # reset per_fold_loss
+    per_fold_loss.fill_(0.0) 
 ```
 
 ## Fold Synchronization
