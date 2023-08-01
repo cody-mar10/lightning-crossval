@@ -154,6 +154,7 @@ class CrossValidationTrainer(Generic[ModelT, ModelConfig]):
         # only setup once
         if not self.setup_complete:
             self.fabric.launch()
+            datamodule.setup("fit")
 
             # setup n_folds models and optimizers
             self.fold_manager: dict[int, FoldState[ModelT]] = dict()
