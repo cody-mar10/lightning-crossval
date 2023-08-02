@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from torch.optim import Optimizer
 
-from lightning_cv._typing import KwargType
+from lightning_cv.typehints import KwargType
 
 from .callbacks import Callback
 

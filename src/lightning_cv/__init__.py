@@ -1,5 +1,4 @@
 from . import (
-    _typing,  # noqa: F401
     callbacks,
     config,
     data,
@@ -7,13 +6,11 @@ from . import (
     split,
     trainer,
     tuning,
+    typehints,
     utils,
 )
 from .config import CrossValidationTrainerConfig
-from .data import (
-    CrossValidationDataModule,
-    GroupCrossValidationDataModule,
-)
+from .data import CrossValidationDataModule
 from .module import BaseModelConfig, CrossValModule, CrossValModuleMixin
 from .split import BaseCrossValidator, BaseGroupCrossValidator
 from .trainer import CrossValidationTrainer
@@ -26,10 +23,10 @@ __all__ = [
     "split",
     "trainer",
     "tuning",
+    "typehints",
     "utils",
     "CrossValidationTrainerConfig",
     "CrossValidationDataModule",
-    "GroupCrossValidationDataModule",
     "BaseModelConfig",
     "CrossValModule",
     "CrossValModuleMixin",

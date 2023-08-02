@@ -10,8 +10,8 @@ from lightning.fabric.wrappers import _FabricModule
 from pydantic import BaseModel, validator
 from torch.optim import Optimizer
 
-from ._typing import ModelT, Number, SchedulerConfigT
 from .callbacks import Callback
+from .typehints import ModelT, Number, SchedulerConfigT
 
 
 class FoldState(BaseModel):

@@ -14,14 +14,6 @@ from lightning_utilities.core.apply_func import apply_to_collection
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 
-from ._typing import (
-    ConfigOptimizerOutput,
-    MetricType,
-    ModelT,
-    Number,
-    OptimizerConfigT,
-    SchedulerConfigT,
-)
 from .callbacks import (
     Callback,
     EvalMode,
@@ -34,6 +26,14 @@ from .callbacks import (
 from .config import CrossValidationTrainerConfig, FoldState
 from .data import CrossValDataModuleT
 from .module import ModelConfig
+from .typehints import (
+    ConfigOptimizerOutput,
+    MetricType,
+    ModelT,
+    Number,
+    OptimizerConfigT,
+    SchedulerConfigT,
+)
 from .utils import (
     convert_output_to_dict,
     detach,

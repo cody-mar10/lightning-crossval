@@ -9,7 +9,7 @@ from lightning.fabric.strategies.fsdp import FSDPStrategy
 from lightning.fabric.strategies.strategy import Strategy
 from lightning.fabric.strategies.xla import XLAStrategy
 
-from ._typing import ForwardOutputType, MetricType, Number
+from .typehints import ForwardOutputType, MetricType, Number
 
 _DISTRIBUTED_STRATEGIES = (DDPStrategy, DeepSpeedStrategy, FSDPStrategy, XLAStrategy)
 

@@ -12,10 +12,9 @@ from lightning.fabric.loggers.csv_logs import CSVLogger
 from lightning.fabric.loggers.logger import Logger
 
 import lightning_cv as lcv
-from lightning_cv._typing import KwargType, ModelConfig, ModelT
 from lightning_cv.callbacks import Callback
 from lightning_cv.module import BaseModelConfig
-from lightning_cv.trainer import CrossValDataModuleT
+from lightning_cv.typehints import CrossValDataModuleT, KwargType, ModelConfig, ModelT
 
 from .callbacks import TrialPruning
 from .hyperparameters import HparamRegistry, IntFloatStrDict, suggest

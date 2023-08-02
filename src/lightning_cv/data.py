@@ -1,17 +1,13 @@
 from __future__ import annotations
 
 from copy import copy
-from typing import Callable, Iterator, Literal, Optional, Protocol, runtime_checkable
+from typing import Callable, Optional, Protocol, runtime_checkable
 
 import torch
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader, Dataset
 
-from ._typing import Int64Array, KwargType
-from .split import CrossValidator
-
-Stage = Literal["fit", "test", "predict"]
-CVDataLoader = Iterator[tuple[DataLoader, DataLoader]]
+from .typehints import CrossValidator, CVDataLoader, Int64Array, KwargType, Stage
 
 
 class SimpleTensorDataset(Dataset):

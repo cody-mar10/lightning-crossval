@@ -8,7 +8,7 @@ from lightning_utilities.core.apply_func import apply_to_collection
 from torch import Tensor
 
 import lightning_cv as lcv
-from lightning_cv._typing import MetricType
+from lightning_cv.typehints import MetricType
 
 if find_spec("ipywidgets") is not None:
     from tqdm.auto import tqdm as _tqdm

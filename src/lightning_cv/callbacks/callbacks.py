@@ -4,7 +4,7 @@ from torch import Tensor
 from torch.optim import Optimizer
 
 import lightning_cv as lcv
-from lightning_cv._typing import KwargType, MetricType
+from lightning_cv.typehints import KwargType, MetricType, ModelT
 
 
 class Callback:
@@ -25,7 +25,7 @@ class Callback:
 
     def on_train_epoch_start_per_fold(
         self,
-        model: "lcv.CrossValModule",
+        model: ModelT,
         total: int,
         current_epoch: int,
         current_fold: int,
@@ -47,7 +47,7 @@ class Callback:
     def on_before_zero_grad(self, optimizer: Optimizer):
         ...
 
-    def on_validation_start_per_fold(self, model: "lcv.CrossValModule"):
+    def on_validation_start_per_fold(self, model: ModelT):
         ...
 
     def on_validation_end_per_fold(self, trainer: "lcv.CrossValidationTrainer"):

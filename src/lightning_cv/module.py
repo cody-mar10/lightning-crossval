@@ -1,52 +1,13 @@
 from __future__ import annotations
 
-from typing import Any, Optional, Protocol, runtime_checkable
+from typing import Optional
 from warnings import warn
 
 from lightning import Fabric, LightningModule
-from lightning.pytorch.utilities.types import STEP_OUTPUT, LRSchedulerTypeUnion
+from lightning.pytorch.utilities.types import STEP_OUTPUT
 from pydantic import BaseModel
 
-from ._typing import ConfigOptimizerOutput
-
-
-@runtime_checkable
-class ModelConfig(Protocol):
-    fabric: Optional[Fabric]
-
-
-@runtime_checkable
-class ModelT(Protocol):
-    fabric: Optional[Fabric]
-
-    def __init__(self, config: ModelConfig):
-        ...
-
-    def training_step(self, *args: Any, **kwargs: Any) -> STEP_OUTPUT:
-        ...
-
-    def validation_step(self, *args: Any, **kwargs: Any) -> STEP_OUTPUT:
-        ...
-
-    def configure_optimizers(self) -> ConfigOptimizerOutput:
-        ...
-
-    def lr_scheduler_step(self, scheduler: LRSchedulerTypeUnion, metric: Any | None):
-        ...
-
-    def train(self, mode: bool):
-        ...
-
-    def eval(self):
-        ...
-
-    @property
-    def estimated_steps(self) -> int:
-        ...
-
-    @estimated_steps.setter
-    def estimated_steps(self, value: int):
-        ...
+from .typehints import ModelConfig
 
 
 class BaseModelConfig(BaseModel):
