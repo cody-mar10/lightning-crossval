@@ -111,14 +111,10 @@ class ImbalancedLeaveOneGroupOut(BaseGroupCrossValidator):
     def __len__(self) -> int:
         return self.n_folds
 
-    def get_n_splits(self, *args, **kwargs) -> int:
-        # args and kwargs not used -> only for type hint
-        # compatibility with sklearn cross validators
+    def get_n_splits(self) -> int:
         return self.n_folds
 
-    def split(self, *args, **kwargs) -> CVIterator:
-        # args and kwargs not used -> only for type hint
-        # compatibility with sklearn cross validators
+    def split(self) -> CVIterator:
         for fold_idx, group_id in enumerate(self.uniq_groups):
             if fold_idx == 0:
                 # the first group will be the most frequent and
