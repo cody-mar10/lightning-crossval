@@ -1,44 +1,51 @@
 from __future__ import annotations
 
 from copy import copy
+from dataclasses import asdict, is_dataclass
 from functools import partial
 from pathlib import Path
 from shutil import rmtree
-from typing import Callable, Generic, Optional, cast
+from typing import Callable, Optional, cast
 
 import optuna
 from lightning.fabric.loggers.csv_logs import CSVLogger
 from lightning.fabric.loggers.logger import Logger
 
 import lightning_cv as lcv
-from lightning_cv._typing import ModelConfig, ModelT
+from lightning_cv._typing import KwargType, ModelConfig, ModelT
 from lightning_cv.callbacks import Callback
-from lightning_cv.trainer import DataModuleType
+from lightning_cv.module import BaseModelConfig
+from lightning_cv.trainer import CrossValDataModuleT
 
 from .callbacks import TrialPruning
 from .hyperparameters import HparamRegistry, IntFloatStrDict, suggest
 
 TrialSuggestionFn = Callable[[optuna.Trial], IntFloatStrDict]
+ModelConfigSerializeFn = Callable[[ModelConfig], KwargType]
 
 
-class Tuner(Generic[ModelT, ModelConfig]):
+class Tuner:
     def __init__(
         self,
         model_type: type[ModelT],
         model_config: ModelConfig,
-        datamodule: DataModuleType,
+        datamodule: CrossValDataModuleT,
         trainer_config: "lcv.CrossValidationTrainerConfig",
         logdir: str | Path = Path("checkpoints"),
         experiment_name: str = "exp0",
         clean_logdir_if_exists: bool = False,
         verbose: bool = False,
         hparam_config_file: Optional[str | Path] = None,
+        model_config_serializer: Optional[ModelConfigSerializeFn] = None,
     ):
         self._hparam_registry = self._init_hparam_registry(hparam_config_file)
 
         self.model_type = model_type
         # only store dict and type so that it can be updated with new trialed values
-        self.model_config = model_config.dict()
+        self.model_config = self._init_model_config(
+            model_config, model_config_serializer
+        )
+
         self.model_config_type = type(model_config)
 
         self.datamodule = datamodule
@@ -51,6 +58,25 @@ class Tuner(Generic[ModelT, ModelConfig]):
 
         self._callbacks = self._store_callbacks(self.trainer_config.callbacks)
         self._logger_types = self._store_logger_types(self.trainer_config.loggers)
+
+    def _init_model_config(
+        self,
+        model_config: ModelConfig,
+        model_config_serializer: Optional[ModelConfigSerializeFn] = None,
+    ) -> KwargType:
+        if isinstance(model_config, BaseModelConfig):
+            # pydantic model
+            return model_config.dict()
+        elif is_dataclass(model_config):
+            return asdict(model_config)
+
+        if model_config_serializer is None:
+            raise ValueError(
+                "Model config is neither a `pydantic.BaseModel` nor a "
+                "`dataclasses.dataclass`. A serialization function to convert the "
+                "input model config to a dictionary is required."
+            )
+        return model_config_serializer(model_config)
 
     def _init_hparam_registry(
         self, config_file: Optional[str | Path]
@@ -149,9 +175,7 @@ class Tuner(Generic[ModelT, ModelConfig]):
         trialed_values = suggester(trial)
 
         # then update model config
-        model_config = self.model_config_type.parse_obj(
-            self.model_config | trialed_values
-        )
+        model_config = self.model_config_type(**(self.model_config | trialed_values))
 
         try:
             trainer.train_with_cross_validation(
