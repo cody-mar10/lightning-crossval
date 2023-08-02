@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Iterator, Protocol, runtime_checkable
+from typing import Callable, Iterator, Protocol, runtime_checkable
 
 import numpy as np
 from numpy.typing import NDArray
@@ -8,14 +8,14 @@ from numpy.typing import NDArray
 Int64Array = NDArray[np.int64]
 CVIterator = Iterator[tuple[Int64Array, Int64Array]]
 
+Type = Callable[..., CVIterator]
+
 
 @runtime_checkable
 class CrossValidator(Protocol):
-    def split(self, *args: Any, **kwargs: Any) -> CVIterator:
-        ...
-
-    def get_n_splits(self, *args: Any, **kwargs: Any) -> int:
-        ...
+    # ignore input types and just require to implement these methods
+    split: Callable[..., CVIterator]
+    get_n_splits: Callable[..., int]
 
 
 @runtime_checkable
