@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Generic, Literal, Optional
+from typing import Any, Literal, Optional
 
 from lightning.fabric.accelerators.accelerator import Accelerator
 from lightning.fabric.loggers.logger import Logger
@@ -14,7 +14,7 @@ from ._typing import ModelT, Number, SchedulerConfigT
 from .callbacks import Callback
 
 
-class FoldState(BaseModel, Generic[ModelT]):
+class FoldState(BaseModel):
     model: ModelT | _FabricModule
     optimizer: Optimizer
     scheduler: Optional[SchedulerConfigT] = None

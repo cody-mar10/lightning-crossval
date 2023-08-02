@@ -5,7 +5,7 @@ import os
 from copy import copy
 from functools import lru_cache, partial
 from pathlib import Path
-from typing import Any, Generic, Literal, Mapping, Optional, cast
+from typing import Any, Literal, Mapping, Optional, cast
 
 import torch
 from lightning import Fabric
@@ -32,7 +32,7 @@ from .callbacks import (
     TrainMode,
 )
 from .config import CrossValidationTrainerConfig, FoldState
-from .data import CrossValidationDataModule, GroupCrossValidationDataModule
+from .data import CrossValDataModuleT
 from .module import ModelConfig
 from .utils import (
     convert_output_to_dict,
@@ -43,10 +43,8 @@ from .utils import (
     validation_update,
 )
 
-DataModuleType = CrossValidationDataModule | GroupCrossValidationDataModule
 
-
-class CrossValidationTrainer(Generic[ModelT, ModelConfig]):
+class CrossValidationTrainer:
     __fabric_keys__ = {
         "accelerator",
         "strategy",
@@ -150,24 +148,24 @@ class CrossValidationTrainer(Generic[ModelT, ModelConfig]):
 
         self.config.callbacks = callbacks
 
-    def setup(self, datamodule: DataModuleType, model_config: ModelConfig):
+    def setup(self, datamodule: CrossValDataModuleT, model_config: ModelConfig):
         # only setup once
         if not self.setup_complete:
             self.fabric.launch()
             datamodule.setup("fit")
 
             # setup n_folds models and optimizers
-            self.fold_manager: dict[int, FoldState[ModelT]] = dict()
+            self.fold_manager: dict[int, FoldState] = dict()
             self.global_step_per_fold.clear()
             self.estimated_steps: dict[int, int] = dict()
 
             if model_config.fabric is None:
                 model_config.fabric = self.fabric
 
-            for fold, foldloader in enumerate(datamodule.train_val_dataloaders()):
-                self.estimated_steps[fold] = self._estimated_steps(
-                    len(foldloader.train_loader)
-                )
+            for fold, (train_loader, val_loader) in enumerate(
+                datamodule.train_val_dataloaders()
+            ):
+                self.estimated_steps[fold] = self._estimated_steps(len(train_loader))
 
                 model: ModelT = self.model_type(model_config)
                 model.estimated_steps = self.estimated_steps[fold]
@@ -176,7 +174,8 @@ class CrossValidationTrainer(Generic[ModelT, ModelConfig]):
 
                 optimizer: Optimizer
                 # ignore fact that fabric returns a wrapper
-                model, optimizer = self.fabric.setup(model, optimizer)
+                # ignore setup takes a torch.nn.Module or a lightning.LightningModule
+                model, optimizer = self.fabric.setup(model, optimizer)  # type: ignore
 
                 self.fold_manager[fold] = FoldState(
                     model=model, optimizer=optimizer, scheduler=scheduler_cfg
@@ -199,7 +198,7 @@ class CrossValidationTrainer(Generic[ModelT, ModelConfig]):
         return max_estimated_steps
 
     def train_with_cross_validation(
-        self, datamodule: DataModuleType, model_config: ModelConfig
+        self, datamodule: CrossValDataModuleT, model_config: ModelConfig
     ):
         # set up n_folds models and optimizers, and creates fold_manager attribute
         # also calls self.fabric.launch()
@@ -221,14 +220,14 @@ class CrossValidationTrainer(Generic[ModelT, ModelConfig]):
         # reset for next fit call
         self.should_stop = False
 
-    def cross_val_loop(self, datamodule: DataModuleType):
+    def cross_val_loop(self, datamodule: CrossValDataModuleT):
         # called once per epoch
         # train and validate each fold
         self.fabric.call("on_train_fold_start", trainer=self)
         foldloaders = datamodule.train_val_dataloaders(shuffle=True)
-        for fold, foldloader in enumerate(foldloaders):
+        for fold, (train_loader, val_loader) in enumerate(foldloaders):
             train_loader, val_loader = self.fabric.setup_dataloaders(
-                foldloader.train_loader, foldloader.val_loader
+                train_loader, val_loader
             )
 
             self.current_fold = fold
@@ -546,7 +545,7 @@ class CrossValidationTrainer(Generic[ModelT, ModelConfig]):
         torch.set_grad_enabled(True)
         self.fabric.call("on_validation_end_per_fold", trainer=self)
 
-    def load(self, path: Path) -> FoldState[ModelT]:
+    def load(self, path: Path) -> FoldState:
         """Loads a checkpoint from a given file into state.
 
         Args:
@@ -564,8 +563,8 @@ class CrossValidationTrainer(Generic[ModelT, ModelConfig]):
 
         return FoldState.parse_obj(state)
 
-    def load_all_folds(self, paths: list[Path]) -> dict[int, FoldState[ModelT]]:
-        fold_manager: dict[int, FoldState[ModelT]] = dict()
+    def load_all_folds(self, paths: list[Path]) -> dict[int, FoldState]:
+        fold_manager: dict[int, FoldState] = dict()
         for path in paths:
             # this should set self.current_fold
             # TODO: will this introduce a race condition? idk
@@ -575,7 +574,7 @@ class CrossValidationTrainer(Generic[ModelT, ModelConfig]):
 
     def save(
         self,
-        states: FoldState[ModelT] | Mapping[int, FoldState[ModelT]],
+        states: FoldState | Mapping[int, FoldState],
         name: Optional[str] = None,
     ):
         """Saves a checkpoint to the ``checkpoint_dir``
@@ -584,7 +583,7 @@ class CrossValidationTrainer(Generic[ModelT, ModelConfig]):
             state: A mapping containing model, optimizer and lr scheduler.
         """
 
-        def _save(_state: FoldState[ModelT], fold: int = 0, name: Optional[str] = None):
+        def _save(_state: FoldState, fold: int = 0, name: Optional[str] = None):
             state = _state.dict()
             state.update(
                 global_step=self.global_step_per_fold[self.current_fold],
