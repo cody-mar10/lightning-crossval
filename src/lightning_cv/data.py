@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 from copy import copy
-from dataclasses import dataclass
-from typing import Callable, Iterator, Literal, Optional
+from typing import Callable, Iterator, Literal, Optional, Protocol, runtime_checkable
 
 import torch
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader, Dataset
 
 from ._typing import Int64Array, KwargType
-from .split import CrossValidator, GroupCrossValidator
+from .split import CrossValidator
 
 Stage = Literal["fit", "test", "predict"]
+CVDataLoader = Iterator[tuple[DataLoader, DataLoader]]
 
 
 class SimpleTensorDataset(Dataset):
@@ -30,24 +30,21 @@ class SimpleTensorDataset(Dataset):
         return torch.stack(batch)
 
 
-@dataclass
-class CVDataLoader:
-    train_loader: DataLoader
-    val_loader: DataLoader
+@runtime_checkable
+class CrossValDataModuleT(Protocol):
+    def setup(self, stage: Stage):
+        ...
+
+    def train_val_dataloaders(self, **dataloader_kwargs) -> CVDataLoader:
+        ...
 
 
-@dataclass
-class GroupCVDataLoader(CVDataLoader):
-    train_group_ids: list[int]
-    val_group_id: int
-
-
-class _CrossValidationDataModule(LightningDataModule):
+class CrossValidationDataModule(LightningDataModule):
     def __init__(
         self,
         dataset: Dataset,
         batch_size: int,
-        cross_validator: type[CrossValidator | GroupCrossValidator],
+        cross_validator: type[CrossValidator],
         cross_validator_config: KwargType,
         collate_fn: Optional[Callable] = None,
         **dataloader_kwargs,
@@ -70,7 +67,7 @@ class _CrossValidationDataModule(LightningDataModule):
                 "allowed."
             )
 
-    def train_val_dataloaders(self, **dataloader_kwargs) -> Iterator[CVDataLoader]:
+    def train_val_dataloaders(self, **dataloader_kwargs) -> CVDataLoader:
         train_kwargs, val_kwargs = self._split_train_val_kwargs(**dataloader_kwargs)
 
         for train_idx, val_idx in self.data_manager.split():
@@ -91,9 +88,7 @@ class _CrossValidationDataModule(LightningDataModule):
                 **val_kwargs,
             )
 
-            cv_dataloader = CVDataLoader(train_loader, val_loader)
-
-            yield cv_dataloader
+            yield train_loader, val_loader
 
     def _split_train_val_kwargs(self, **kwargs) -> tuple[KwargType, KwargType]:
         train_kwargs = self._overwrite_dataloader_kwargs(**kwargs)
@@ -109,56 +104,3 @@ class _CrossValidationDataModule(LightningDataModule):
     def _from_numpy(self, *arrays: Int64Array) -> tuple[torch.Tensor, ...]:
         tensors = [torch.from_numpy(array) for array in arrays]
         return tuple(tensors)
-
-
-class CrossValidationDataModule(_CrossValidationDataModule):
-    def __init__(
-        self,
-        dataset: Dataset,
-        batch_size: int,
-        cross_validator: type[CrossValidator],
-        cross_validator_config: KwargType,
-        collate_fn: Optional[Callable] = None,
-        **dataloader_kwargs,
-    ) -> None:
-        super().__init__(
-            dataset,
-            batch_size,
-            cross_validator,
-            cross_validator_config,
-            collate_fn=collate_fn,
-            **dataloader_kwargs,
-        )
-        self.data_manager: CrossValidator
-
-
-class GroupCrossValidationDataModule(_CrossValidationDataModule):
-    def __init__(
-        self,
-        dataset: Dataset,
-        batch_size: int,
-        cross_validator: type[GroupCrossValidator],
-        cross_validator_config: KwargType,
-        collate_fn: Optional[Callable] = None,
-        **dataloader_kwargs,
-    ) -> None:
-        super().__init__(
-            dataset,
-            batch_size,
-            cross_validator,
-            cross_validator_config,
-            collate_fn=collate_fn,
-            **dataloader_kwargs,
-        )
-        self.data_manager: GroupCrossValidator
-
-    def train_val_dataloaders(self, **dataloader_kwargs) -> Iterator[GroupCVDataLoader]:
-        for cv_dataloader in super().train_val_dataloaders(**dataloader_kwargs):
-            group_cv_dataloader = GroupCVDataLoader(
-                train_loader=cv_dataloader.train_loader,
-                val_loader=cv_dataloader.val_loader,
-                train_group_ids=self.data_manager.train_group_ids,
-                val_group_id=self.data_manager.val_group_id,
-            )
-
-            yield group_cv_dataloader
