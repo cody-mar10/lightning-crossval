@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from copy import copy
+from functools import partial
 from pathlib import Path
 from shutil import rmtree
-from typing import Any, Callable, Generic, Optional, cast
+from typing import Callable, Generic, Optional, cast
 
 import optuna
 from lightning.fabric.loggers.csv_logs import CSVLogger
@@ -15,8 +16,9 @@ from lightning_cv.callbacks import Callback
 from lightning_cv.trainer import DataModuleType
 
 from .callbacks import TrialPruning
+from .hyperparameters import HparamRegistry, IntFloatStrDict, suggest
 
-TrialSuggestionFn = Callable[[optuna.Trial], dict[str, Any]]
+TrialSuggestionFn = Callable[[optuna.Trial], IntFloatStrDict]
 
 
 class Tuner(Generic[ModelT, ModelConfig]):
@@ -30,7 +32,10 @@ class Tuner(Generic[ModelT, ModelConfig]):
         experiment_name: str = "exp0",
         clean_logdir_if_exists: bool = False,
         verbose: bool = False,
+        hparam_config_file: Optional[str | Path] = None,
     ):
+        self._hparam_registry = self._init_hparam_registry(hparam_config_file)
+
         self.model_type = model_type
         # only store dict and type so that it can be updated with new trialed values
         self.model_config = model_config.dict()
@@ -38,7 +43,7 @@ class Tuner(Generic[ModelT, ModelConfig]):
 
         self.datamodule = datamodule
 
-        self.trial_number = 0
+        self._trial_number = 0
         self.verbose = verbose
         self.experiment_name = experiment_name
         self._init_logdir(logdir, clean_logdir_if_exists)
@@ -46,6 +51,14 @@ class Tuner(Generic[ModelT, ModelConfig]):
 
         self._callbacks = self._store_callbacks(self.trainer_config.callbacks)
         self._logger_types = self._store_logger_types(self.trainer_config.loggers)
+
+    def _init_hparam_registry(
+        self, config_file: Optional[str | Path]
+    ) -> Optional[HparamRegistry]:
+        if config_file is None:
+            return None
+
+        return HparamRegistry.from_file(config_file)
 
     def _init_logdir(self, logdir: str | Path, clean_logdir_if_exists: bool = False):
         if isinstance(logdir, str):
@@ -89,14 +102,32 @@ class Tuner(Generic[ModelT, ModelConfig]):
 
         return logger_types
 
+    @property
+    def trial_number(self) -> int:
+        return self._trial_number
+
     def tune(
-        self, trial: optuna.Trial, func: TrialSuggestionFn, monitor: str = "loss"
+        self,
+        trial: optuna.Trial,
+        suggest_fn: Optional[TrialSuggestionFn] = None,
+        monitor: str = "loss",
     ) -> float:
+        if suggest_fn is None:
+            if self._hparam_registry is None:
+                raise ValueError(
+                    "Either a hparam config toml file must be passed upon Tuner init "
+                    "or a suggestion function must be passed to this method."
+                )
+            else:
+                suggester = partial(suggest, registry=self._hparam_registry)
+        else:
+            suggester = suggest_fn
+
         loggers = [
             logger_type(  # type: ignore
                 root_dir=self.logdir,
                 name=self.experiment_name,
-                version=self.trial_number,
+                version=self._trial_number,
             )
             for logger_type in self._logger_types
         ]
@@ -115,7 +146,7 @@ class Tuner(Generic[ModelT, ModelConfig]):
         )
 
         # suggest values here
-        trialed_values = func(trial)
+        trialed_values = suggester(trial)
 
         # then update model config
         model_config = self.model_config_type.parse_obj(
@@ -130,6 +161,6 @@ class Tuner(Generic[ModelT, ModelConfig]):
             # TODO: add optional pruning hook
             raise err
 
-        self.trial_number += 1
+        self._trial_number += 1
 
         return trainer.current_val_metrics[monitor].item()
