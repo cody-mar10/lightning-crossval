@@ -135,15 +135,24 @@ class OptunaHyperparameterLogger:
         self,
         root_dir: Path,
         logfile: str = "sampled_hparams.json",
+        monitor: str = "loss",
     ):
         self.root_dir = root_dir
         self.logfile = logfile
+        self.monitor = monitor if monitor.startswith("val_") else f"val_{monitor}"
 
     def __call__(self, study: optuna.Study, trial: optuna.trial.FrozenTrial):
         trial_id = trial.number
         expt_name = study.study_name
         logdir = self.root_dir / expt_name / f"version_{trial_id}"
         logfile = logdir.joinpath(self.logfile)
+
+        record = {
+            "monitor": self.monitor,
+            "performance": trial.intermediate_values,
+            "hparams": trial.params,
+        }
+
         with logfile.open("w") as fp:
-            json.dump(trial.params, fp, indent=4)
+            json.dump(record, fp, indent=4)
             fp.write("\n")
