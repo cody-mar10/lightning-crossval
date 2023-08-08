@@ -9,6 +9,13 @@ from . import (
     typehints,
     utils,
 )
+from .__metadata__ import (
+    __author__,
+    __description__,
+    __license__,
+    __title__,
+    __version__,
+)
 from .config import CrossValidationTrainerConfig
 from .data import CrossValidationDataModule
 from .module import BaseModelConfig, CrossValModule, CrossValModuleMixin
