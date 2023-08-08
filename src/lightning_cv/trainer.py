@@ -315,14 +315,11 @@ class CrossValidationTrainer:
                     "on_before_optimizer_step", optimizer=optimizer, optimizer_idx=0
                 )
 
-                # optimizer step runs train step internally through closure
-                closure = partial(
-                    self.training_step,
-                    model=model,
-                    batch=batch,
-                    batch_idx=batch_idx,
-                )
-                optimizer.step(closure)  # type: ignore
+                # although some optimizers need a closure
+                # these are not compatibile with automatic precision scaling
+                self.training_step(model=model, batch=batch, batch_idx=batch_idx)
+                optimizer.step()
+
                 self.fabric.call("on_before_zero_grad", optimizer=optimizer)
 
                 optimizer.zero_grad()
