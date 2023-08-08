@@ -14,12 +14,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
 ]
-dependencies = [
-    "torch>=2",
-    "lightning>=2",
-    # "pandas",
-    "pydantic",
-]
+dependencies = ["torch>=2", "lightning>=2", "pydantic>=2"]
 
 [project.urls]
 "Homepage" = "https://github.com/cody-mar10/lightning-crossval"
@@ -28,3 +23,9 @@ dependencies = [
 [tool.ruff]
 src = ["src"]
 line-length = 90
+
+[tool.ruff.per-file-ignores]
+"__init__.py" = ["F401"] # allow unused imports in `__init__.py`
+
+[tool.coverage.run]
+plugins = ["covdefaults"]
