@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, Optional
 
 import optuna
 from lightning_utilities.core.apply_func import apply_to_collection
@@ -15,7 +16,7 @@ from .config import (
 )
 
 TrialedValue = int | float | str
-IntFloatStrDict = dict[str, TrialedValue]
+IntFloatStrDict = dict[str, TrialedValue | dict[str, TrialedValue]]
 
 
 class HparamRegistry:
@@ -44,15 +45,15 @@ class HparamRegistry:
 
     def _register(
         self, x: TunableType, trial: optuna.Trial
-    ) -> tuple[str, TrialedValue]:
+    ) -> tuple[str, TrialedValue, Optional[str]]:
         method = f"suggest_{x.suggest}"
-        method_kwargs = x.dict(include=self.__suggest_fields__)
+        method_kwargs = x.model_dump(include=self.__suggest_fields__)
         trialed_value: TrialedValue = getattr(trial, method)(**method_kwargs)
 
         if isinstance(x, TunableCategorical) and x.map is not None:
             trialed_value = x.map[trialed_value]
 
-        return x.name, trialed_value
+        return x.name, trialed_value, x.parent
 
     def register_hparams(self, trial: optuna.Trial):
         hparams = apply_to_collection(
@@ -62,15 +63,27 @@ class HparamRegistry:
             trial=trial,
         )
 
+        nested_hparams = defaultdict(dict)
         # proxy hparams may map to an arbitrary number of other hparams that are dicts
         # ex: ProxyHparam has choices [a, b, c]
         # but each choice just maps -> a: {real_hparam1: x, real_hparam2: y}
         # thus, if anything mapped, unnest and remove proxy hparam
-        for key, value in hparams:
-            if isinstance(value, Mapping):
-                self._hparams.update(value)
+
+        # further, need to convert to the correct nesting for the model config
+        for key, value, parent in hparams:
+            if parent is not None:
+                # create a new subdict with the parent as the key
+                current: dict = nested_hparams[parent]
             else:
-                self._hparams[key] = value
+                # otherwise add keys to root level
+                current = nested_hparams
+
+            if isinstance(value, Mapping):
+                current.update(value)
+            else:
+                current[key] = value
+
+        self._hparams = dict(nested_hparams)
 
 
 def suggest(trial: optuna.Trial, registry: HparamRegistry) -> IntFloatStrDict:
