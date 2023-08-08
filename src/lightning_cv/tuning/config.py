@@ -27,6 +27,7 @@ SuggestValues = Literal["int", "float", "categorical"]
 class Tunable(BaseModel):
     name: str
     suggest: SuggestValues
+    parent: Optional[str] = Field(None, description="parent for nested hparams")
 
 
 class TunableInt(Tunable):
@@ -47,7 +48,7 @@ class TunableFloat(Tunable):
 class TunableCategorical(Tunable, Generic[_T, _U]):
     suggest: Literal["categorical"]
     choices: Sequence[_T]
-    map: Optional[dict[_T, _U]]
+    map: Optional[dict[_T, _U]] = None
 
 
 TunableType = Annotated[
@@ -65,9 +66,9 @@ def load_config(file: str | Path) -> HparamConfig:
     with open(file, "rb") as fp:
         config = tomli.load(fp)
 
-    validated_config = HparamConfig.validate(config)
+    validated_config = HparamConfig.model_validate(config)
     return validated_config
 
 
 def DummyHparamConfig() -> HparamConfig:
-    return HparamConfig.construct()
+    return HparamConfig.model_construct()
