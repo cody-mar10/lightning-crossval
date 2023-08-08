@@ -65,7 +65,7 @@ class Tuner:
     ) -> KwargType:
         if isinstance(model_config, BaseModelConfig):
             # pydantic model
-            return model_config.dict()
+            return model_config.model_dump()
         elif is_dataclass(model_config):
             return asdict(model_config)
 

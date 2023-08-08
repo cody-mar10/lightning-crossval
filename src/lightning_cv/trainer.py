@@ -74,7 +74,7 @@ class CrossValidationTrainer:
 
         self._add_default_callbacks(self.config.callbacks)
 
-        fabric_kwargs = self.config.dict(include=self.__fabric_keys__)
+        fabric_kwargs = self.config.model_dump(include=self.__fabric_keys__)
         self.fabric = Fabric(**fabric_kwargs)
 
     @property
