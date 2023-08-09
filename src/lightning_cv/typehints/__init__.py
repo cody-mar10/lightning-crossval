@@ -6,7 +6,7 @@ from lightning.fabric.utilities.types import LRScheduler
 from torch import Tensor
 from torch.optim import Optimizer
 
-from .data import CrossValDataModuleT, CVDataLoader, Stage
+from .data import CrossValDataModuleT, CVDataLoader, DataclassInstance, Stage
 from .module import ConfigOptimizerOutput, ModelConfig, ModelT
 from .split import CrossValidator, CVIterator, GroupCrossValidator, Int64Array
 
@@ -36,6 +36,7 @@ __all__ = [
     "CrossValDataModuleT",
     "Stage",
     "CVDataLoader",
+    "DataclassInstance",
     # module types
     "ModelConfig",
     "ModelT",
