@@ -83,17 +83,6 @@ class TrialPruning(lcv.callbacks.Callback):
                 self._trial._trial_id, self._EPOCH_KEY, current_epoch
             )
 
-    def _local_check_prune(
-        self, trainer: "lcv.CrossValidationTrainer", should_stop: bool = False
-    ):
-        current_epoch = trainer.current_epoch
-        if not self.is_ddp_backend:
-            if not self._trial.should_prune() and not should_stop:
-                # both the trial must think it doesn't need to prune
-                # AND an external factors, like the occurence of nan loss
-                return
-            raise optuna.TrialPruned(self.prune_message(epoch=current_epoch))
-
     def on_train_fold_end(self, trainer: "lcv.CrossValidationTrainer"):
         current_score = trainer.current_val_metrics[self.monitor].item()
         current_epoch = trainer.current_epoch
@@ -107,7 +96,12 @@ class TrialPruning(lcv.callbacks.Callback):
         self._trial.report(current_score, current_epoch)
 
         # single process training
-        self._local_check_prune(trainer, should_stop)
+        if not self.is_ddp_backend:
+            if not self._trial.should_prune() and not should_stop:
+                # both the trial must think it doesn't need to prune
+                # AND an external factors, like the occurence of nan loss
+                return
+            raise optuna.TrialPruned(self.prune_message(epoch=current_epoch))
 
         # distributed training
         self._distributed_check_prune(trainer, current_score, should_stop)
