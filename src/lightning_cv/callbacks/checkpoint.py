@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import partial
+from math import isinf, isnan
 from typing import Literal, Optional, cast
 
 import lightning_cv as lcv
@@ -45,6 +46,11 @@ class ModelCheckpoint(Callback):
             return
 
         k = len(self.best_k_models) + 1 if self.save_top_k == -1 else self.save_top_k
+
+        if isnan(metric) or isinf(metric):
+            # don't store, especially problematic with nan
+            # since nan is not considered by min/max
+            return
 
         # store current val loss
         self.best_k_models[trainer.current_epoch] = metric
