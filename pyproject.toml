@@ -14,7 +14,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
 ]
-dependencies = ["torch>=2", "lightning>=2", "pydantic>=2"]
+dependencies = ["torch>=2", "lightning>=2", "pydantic>=2", "boltons"]
 
 [project.urls]
 "Homepage" = "https://github.com/cody-mar10/lightning-crossval"
