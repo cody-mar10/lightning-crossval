@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from math import isinf, isnan
 from pathlib import Path
 from typing import cast
 
@@ -45,19 +46,13 @@ class TrialPruning(lcv.callbacks.Callback):
             f"\n{self._SEPARATOR} Trial {self._trial._trial_id} END {self._SEPARATOR}\n"
         )
 
-    def on_train_fold_end(self, trainer: "lcv.CrossValidationTrainer"):
-        current_score = trainer.current_val_metrics[self.monitor].item()
+    def _distributed_check_prune(
+        self,
+        trainer: "lcv.CrossValidationTrainer",
+        current_score: float,
+        should_stop: bool = False,
+    ):
         current_epoch = trainer.current_epoch
-        should_stop = False
-        self._trial.report(current_score, current_epoch)
-
-        # single process training
-        if not self.is_ddp_backend:
-            if not self._trial.should_prune():
-                return
-            raise optuna.TrialPruned(self.prune_message(epoch=current_epoch))
-
-        # distributed training
         if trainer.is_global_zero:
             should_stop = self._trial.should_prune()
 
@@ -87,6 +82,35 @@ class TrialPruning(lcv.callbacks.Callback):
             self._trial.storage.set_trial_system_attr(
                 self._trial._trial_id, self._EPOCH_KEY, current_epoch
             )
+
+    def _local_check_prune(
+        self, trainer: "lcv.CrossValidationTrainer", should_stop: bool = False
+    ):
+        current_epoch = trainer.current_epoch
+        if not self.is_ddp_backend:
+            if not self._trial.should_prune() and not should_stop:
+                # both the trial must think it doesn't need to prune
+                # AND an external factors, like the occurence of nan loss
+                return
+            raise optuna.TrialPruned(self.prune_message(epoch=current_epoch))
+
+    def on_train_fold_end(self, trainer: "lcv.CrossValidationTrainer"):
+        current_score = trainer.current_val_metrics[self.monitor].item()
+        current_epoch = trainer.current_epoch
+        should_stop = False
+
+        if isnan(current_score) or isinf(current_score):
+            # stop if we start seeing nan/inf
+            should_stop = True
+
+        # stores current_score into the trial's intermediate values
+        self._trial.report(current_score, current_epoch)
+
+        # single process training
+        self._local_check_prune(trainer, should_stop)
+
+        # distributed training
+        self._distributed_check_prune(trainer, current_score, should_stop)
 
     def check_pruned(self):
         """Raise :class:`optuna.TrialPruned` manually if pruned.
