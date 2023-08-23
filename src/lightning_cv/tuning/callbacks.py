@@ -37,13 +37,13 @@ class TrialPruning(lcv.callbacks.Callback):
                 )
 
         print(
-            f"\n{self._SEPARATOR} Trial {self._trial._trial_id} BEGIN {self._SEPARATOR}"
+            f"\n{self._SEPARATOR} Trial {self._trial._trial_id-1} BEGIN {self._SEPARATOR}"
             "\n"
         )
 
     def on_train_end(self, trainer: "lcv.CrossValidationTrainer"):
         print(
-            f"\n{self._SEPARATOR} Trial {self._trial._trial_id} END {self._SEPARATOR}\n"
+            f"\n{self._SEPARATOR} Trial {self._trial._trial_id-1} END {self._SEPARATOR}\n"
         )
 
     def _distributed_check_prune(
@@ -68,7 +68,10 @@ class TrialPruning(lcv.callbacks.Callback):
                 intermediate_values,
             )
 
-        should_stop = trainer.fabric.strategy.broadcast(should_stop)
+        # if ANY process has decided to stop
+        should_stop = trainer.fabric.strategy.reduce_boolean_decision(
+            should_stop, all=False
+        )
         trainer.should_stop = trainer.should_stop or should_stop
 
         if not should_stop:
@@ -152,17 +155,20 @@ class OptunaHyperparameterLogger:
     def __init__(
         self,
         root_dir: Path,
+        expt_name: str,
         logfile: str = "sampled_hparams.json",
         monitor: str = "loss",
     ):
         self.root_dir = root_dir
+        self.expt_name = expt_name
         self.logfile = logfile
         self.monitor = monitor if monitor.startswith("val_") else f"val_{monitor}"
 
     def __call__(self, study: optuna.Study, trial: optuna.trial.FrozenTrial):
-        trial_id = trial.number
-        expt_name = study.study_name
-        logdir = self.root_dir / expt_name / f"version_{trial_id}"
+        trial_id = (
+            trial.number
+        )  # TODO: this no longer matches up with the logger version
+        logdir = self.root_dir / self.expt_name / f"version_{trial_id}"
         logfile = logdir.joinpath(self.logfile)
 
         record = {
