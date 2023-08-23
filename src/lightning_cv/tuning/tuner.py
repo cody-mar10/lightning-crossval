@@ -11,6 +11,7 @@ import optuna
 from boltons.iterutils import get_path, remap
 from lightning.fabric.loggers.csv_logs import CSVLogger
 from lightning.fabric.loggers.logger import Logger
+from optuna.trial import TrialState
 from pydantic import BaseModel, Field
 
 import lightning_cv as lcv
@@ -94,7 +95,7 @@ class _TrialUpdater(BaseModel):
         # the following two `values` schemas work:
 
         # 1. flat values
-        >>> config = TrainingConfig(model=model_cfg, data=data_cfg)
+        >>> config = _TrialUpdater(model=model_cfg, data=data_cfg)
         >>> new_values = {"lr": 2.53e-4, "batch_size": 16}
         >>> config.update(new_values)
         >>> print(config.model)
@@ -103,7 +104,7 @@ class _TrialUpdater(BaseModel):
         {"batch_size": 16}
 
         # 2. nested values
-        >>> config = TrainingConfig(model=model_cfg, data=data_cfg)
+        >>> config = _TrialUpdater(model=model_cfg, data=data_cfg)
         >>> new_values = {
         ...     "model": {"optimizer": {"lr": 2.53e-4}},
         ...     "data": {"batch_size": 16}
@@ -166,7 +167,6 @@ class Tuner:
             model=serialized_model_config, data=serialized_data_config
         )
 
-        self._trial_number = 0
         self.verbose = verbose
         self.experiment_name = experiment_name
         self._init_logdir(logdir, clean_logdir_if_exists)
@@ -174,6 +174,8 @@ class Tuner:
 
         self._callbacks = self._store_callbacks(self.trainer_config.callbacks)
         self._logger_types = self._store_logger_types(self.trainer_config.loggers)
+
+        self._trial_number = 0
 
     def _init_model_config(
         self,
@@ -302,6 +304,23 @@ class Tuner:
                 "values. Try calling the `.trial_updater.update` method."
             )
 
+    def _set_trial_number(self, study: optuna.Study):
+        trials = study.get_trials(deepcopy=False)
+        if trials:
+            latest_trial = max(trials, key=lambda x: x.number)
+            if latest_trial.state == TrialState.RUNNING:
+                # latest_trial is actively running so use that number
+                number = latest_trial.number
+            else:
+                # latest_trial completed so need to increment
+                number = latest_trial.number + 1
+        else:
+            # default currently stored value which starts at 0
+            # should only be used for the first trial
+            # then the number should always be handled by the optuna.Study
+            number = self._trial_number
+        return number
+
     @property
     def trial_number(self) -> int:
         return self._trial_number
@@ -313,6 +332,7 @@ class Tuner:
         trialed_values: Optional[IntFloatStrDict] = None,
         monitor: str = "loss",
     ) -> float:
+        self._trial_number = self._set_trial_number(trial.study)
         if trialed_values is None:
             # if not trialed_values passed, then need to check for a suggestion fn
             if suggest_fn is None:
@@ -366,7 +386,10 @@ class Tuner:
         except optuna.TrialPruned as err:
             # TODO: add optional pruning hook
             raise err
-
-        self._trial_number += 1
+        finally:
+            # always increment trial number even if trial gets pruned
+            # NOTE: this shouldn't be needed since this will mostly defer
+            # to the `optuna.Study` update its trial numbers
+            self._trial_number += 1
 
         return trainer.current_val_metrics[monitor].item()
