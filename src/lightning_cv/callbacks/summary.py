@@ -18,7 +18,7 @@ class ModelSummary(Callback):
     def on_train_start(self, trainer: "lcv.CrossValidationTrainer"):
         model = cast(LightningModule, trainer.fold_manager[0].model)
         summary = summarize(model, max_depth=self.max_depth)
-        sys.stderr.write(repr(summary))
+        sys.stderr.write(f"{repr(summary)}\n")
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(max_depth={self.max_depth})"
