@@ -4,6 +4,7 @@ from .logger import LogFlusher
 from .lr_monitor import LearningRateMonitor
 from .mode import EvalMode, TrainMode
 from .progress import TqdmProgressBar
+from .stopping import EarlyStopping
 from .summary import ModelSummary
 
 __all__ = [
@@ -15,4 +16,5 @@ __all__ = [
     "TrainMode",
     "TqdmProgressBar",
     "ModelSummary",
+    "EarlyStopping",
 ]
