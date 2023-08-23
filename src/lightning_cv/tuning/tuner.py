@@ -4,7 +4,6 @@ from copy import copy
 from dataclasses import asdict, is_dataclass
 from functools import partial
 from pathlib import Path
-from shutil import rmtree
 from typing import Any, Callable, Mapping, Optional, cast
 
 import optuna
@@ -169,8 +168,8 @@ class Tuner:
 
         self.verbose = verbose
         self.experiment_name = experiment_name
-        self._init_logdir(logdir, clean_logdir_if_exists)
         self.trainer_config = trainer_config
+        self._init_logdir(logdir, clean_logdir_if_exists)
 
         self._callbacks = self._store_callbacks(self.trainer_config.callbacks)
         self._logger_types = self._store_logger_types(self.trainer_config.loggers)
@@ -242,13 +241,14 @@ class Tuner:
         # (default_root_dir/name/version_#)
         # so need to check if default_root_dir/name exists
         actual_path = self.logdir.joinpath(self.experiment_name)
-        if actual_path.exists():
-            if not clean_logdir_if_exists:
-                raise RuntimeError(
-                    f"The log directory {self.logdir} exists. Use "
-                    "`clean_logdir_if_exists` or change the log directory."
-                )
-            rmtree(actual_path)
+        # if actual_path.exists():
+        #     if not clean_logdir_if_exists:
+        #         raise RuntimeError(
+        #             f"The log directory {self.logdir} exists. Use "
+        #             "`clean_logdir_if_exists` or change the log directory."
+        #         )
+        #     elif self.trainer_config.devices > 1:
+        #         rmtree(actual_path)
 
         actual_path.mkdir(exist_ok=True, parents=True)
 
