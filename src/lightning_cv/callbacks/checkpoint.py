@@ -70,14 +70,19 @@ class ModelCheckpoint(Callback):
 
             # if current epoch would be deleted immediately don't save it
             if del_epoch != trainer.current_epoch:
-                trainer.save(trainer.fold_manager)
+                self.save(trainer)
         else:
             # otherwise just save the checkpoint
-            trainer.save(trainer.fold_manager)
+            self.save(trainer)
 
     def on_train_end(self, trainer: "lcv.CrossValidationTrainer"):
         if self.save_last:
-            trainer.save(trainer.fold_manager, name="fold={fold}-last.ckpt")
+            self.save(trainer, suffix="last", include_val_loss=False)
+
+    def save(self, trainer: "lcv.CrossValidationTrainer", **kwargs):
+        if not trainer.should_stop:
+            # don't save if trainer was told to stop from external signals
+            trainer.save(trainer.fold_manager, **kwargs)
 
     def __repr__(self) -> str:
         kwargs = dict(

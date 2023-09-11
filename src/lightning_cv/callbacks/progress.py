@@ -58,6 +58,7 @@ class TqdmProgressBar(Callback):
 
     def on_train_epoch_start_per_fold(
         self,
+        trainer: "lcv.CrossValidationTrainer",
         model: "lcv.CrossValModule",
         total: int,
         current_epoch: int,
@@ -70,12 +71,20 @@ class TqdmProgressBar(Callback):
         self.current_epoch = current_epoch
         self.train_pbar.set_description(f"Epoch {current_epoch} Fold {current_fold}")
 
-    def on_train_batch_end_per_fold(self, output: MetricType, batch, batch_idx: int):
+    def on_train_batch_end_per_fold(
+        self,
+        trainer: "lcv.CrossValidationTrainer",
+        output: MetricType,
+        batch,
+        batch_idx: int,
+    ):
         n = batch_idx + 1
         _update_pbar(self.train_pbar, value=n)
         self._train_log(output)
 
-    def on_train_epoch_end_per_fold(self, output: MetricType):
+    def on_train_epoch_end_per_fold(
+        self, trainer: "lcv.CrossValidationTrainer", output: MetricType
+    ):
         self._train_log(output)
 
     def _train_log(self, output: MetricType):
@@ -86,30 +95,28 @@ class TqdmProgressBar(Callback):
     def on_train_end(self, trainer: "lcv.CrossValidationTrainer"):
         self.train_pbar.close()
 
-    def on_validation_start_per_fold(self, model: "lcv.CrossValModule"):
-        self.val_pbar = self.init_progbar(stage="validate")
-
-    def on_validation_batch_start_per_fold(
-        self, batch, batch_idx: int, total: int, current_fold: int
+    def on_validation_start_per_fold(
+        self,
+        trainer: "lcv.CrossValidationTrainer",
+        model: "lcv.CrossValModule",
+        total: int,
     ):
-        # update total
-        self.val_pbar.reset(total=total)
-        # reset batch number to 0
-        self.val_pbar.initial = 0
-        self.val_pbar.set_description(f"Fold {current_fold} validation")
+        self.val_pbar = self.init_progbar(stage="validate", total=total)
+        self.val_pbar.set_description(
+            f"Epoch {self.current_epoch} Fold {trainer.current_fold} validation"
+        )
 
     def on_validation_batch_end_per_fold(
-        self, output: MetricType, batch, batch_idx: int
+        self,
+        trainer: "lcv.CrossValidationTrainer",
+        output: MetricType,
+        batch,
+        batch_idx: int,
     ):
         n = batch_idx + 1
         _update_pbar(self.val_pbar, value=n)
 
     def on_validation_end_per_fold(self, trainer: "lcv.CrossValidationTrainer"):
-        if self.train_pbar is not None:
-            # self.train_pbar.set_postfix() # TODO:
-            pass
-
-        # self.val_pbar.clear()
         self.val_pbar.close()
 
     def get_metrics(self, candidates: MetricType) -> ExtractedMetricType:
