@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import os
+from collections import defaultdict
 from copy import copy
 from functools import lru_cache, partial
 from pathlib import Path
@@ -9,20 +10,19 @@ from typing import Any, Literal, Mapping, Optional, cast
 
 import torch
 from lightning import Fabric
+from lightning.fabric.loggers.csv_logs import CSVLogger
 from lightning.fabric.utilities.types import LRScheduler
 from lightning_utilities.core.apply_func import apply_to_collection
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 
-from .callbacks import (
-    Callback,
-    EvalMode,
-    LogFlusher,
-    ModelCheckpoint,
-    ModelSummary,
-    TqdmProgressBar,
-    TrainMode,
-)
+from lightning_cv.callbacks.base import Callback
+from lightning_cv.callbacks.checkpoint import ModelCheckpoint
+from lightning_cv.callbacks.logger import LogFlusher
+from lightning_cv.callbacks.mode import EvalMode, TrainMode
+from lightning_cv.callbacks.progress import TqdmProgressBar
+from lightning_cv.callbacks.summary import ModelSummary
+
 from .config import CrossValidationTrainerConfig, FoldState
 from .data import CrossValDataModuleT
 from .module import ModelConfig
@@ -44,6 +44,7 @@ from .utils import (
 )
 
 
+# TODO: wrap fabric callbacks to assert correct methods are called
 class CrossValidationTrainer:
     __fabric_keys__ = {
         "accelerator",
@@ -56,6 +57,7 @@ class CrossValidationTrainer:
     }
 
     __reset_fn__ = partial(torch.fill_, value=0.0)
+    __callbacks__ = Callback.available_callbacks()
 
     def __init__(self, model_type: type[ModelT], config: CrossValidationTrainerConfig):
         self.config = config
@@ -71,6 +73,11 @@ class CrossValidationTrainer:
         self.should_stop = False
         self.current_train_metrics: MetricType = dict()
         self._current_val_metrics_per_fold: MetricType = dict()
+
+        if self.config.loggers is None:
+            self.config.loggers = CSVLogger(
+                root_dir=self.config.checkpoint_dir,
+            )
 
         self._add_default_callbacks(self.config.callbacks)
 
@@ -203,27 +210,29 @@ class CrossValidationTrainer:
         # set up n_folds models and optimizers, and creates fold_manager attribute
         # also calls self.fabric.launch()
         self.setup(datamodule=datamodule, model_config=model_config)
-        self.fabric.call("on_train_start", trainer=self)
+        self.apply_callback("on_train_start", trainer=self)
         while not self.should_stop:
             # calls train_loop, val_loop, step_scheduler per fold
             self.cross_val_loop(datamodule=datamodule)
 
             self.current_epoch += 1
 
-            # stopping condition on epoch level
-            if self.current_epoch >= self.config.max_epochs:
-                self.should_stop = True
-
             self.is_first_epoch = False
 
-        self.fabric.call("on_train_end", trainer=self)
+            # stopping condition on epoch level
+            # don't change self.should_stop here
+            # reserver self.should_stop for external signals for stopping
+            if self.current_epoch >= self.config.max_epochs:
+                break
+
+        self.apply_callback("on_train_end", trainer=self)
         # reset for next fit call
         self.should_stop = False
 
     def cross_val_loop(self, datamodule: CrossValDataModuleT):
         # called once per epoch
         # train and validate each fold
-        self.fabric.call("on_train_fold_start", trainer=self)
+        self.apply_callback("on_train_fold_start", trainer=self)
         foldloaders = datamodule.train_val_dataloaders(shuffle=True)
         for fold, (train_loader, val_loader) in enumerate(foldloaders):
             train_loader, val_loader = self.fabric.setup_dataloaders(
@@ -272,7 +281,7 @@ class CrossValidationTrainer:
             function=self.__reset_fn__,
         )
 
-        self.fabric.call("on_train_fold_end", trainer=self)
+        self.apply_callback("on_train_fold_end", trainer=self)
 
     def train_loop(
         self,
@@ -284,7 +293,8 @@ class CrossValidationTrainer:
         self.state = "train"
         n_batches = len(train_loader)
         batch_limit = self._limit_batches(n_batches, self.config.limit_train_batches)
-        self.fabric.call(
+
+        self.apply_callback(
             "on_train_epoch_start_per_fold",
             model=model,
             total=batch_limit,
@@ -292,14 +302,19 @@ class CrossValidationTrainer:
             current_fold=self.current_fold,
         )  # calls model.train()
 
-        output = 0.0  # ignore mypy unbound warnings
+        # default starting value in case loop never runs
+        output = flatten_train_val_metrics(
+            train_metrics=self.current_train_metrics,
+            val_metrics=self.current_val_metrics if not self.is_first_epoch else None,
+            prepend_stage=not self.is_first_epoch,
+        )
         for batch_idx, batch in enumerate(train_loader):
             # end epoch if stopping training completely or
             # max batches for this epoch reached
             if self.should_stop or batch_idx >= batch_limit:
                 break
 
-            self.fabric.call(
+            self.apply_callback(
                 "on_train_batch_start_per_fold", batch=batch, batch_idx=batch_idx
             )
 
@@ -311,7 +326,7 @@ class CrossValidationTrainer:
             )
             if should_optim_step:
                 # currently only supports a single optimizer
-                self.fabric.call(
+                self.apply_callback(
                     "on_before_optimizer_step", optimizer=optimizer, optimizer_idx=0
                 )
 
@@ -320,7 +335,7 @@ class CrossValidationTrainer:
                 self.training_step(model=model, batch=batch, batch_idx=batch_idx)
                 optimizer.step()
 
-                self.fabric.call("on_before_zero_grad", optimizer=optimizer)
+                self.apply_callback("on_before_zero_grad", optimizer=optimizer)
 
                 optimizer.zero_grad()
 
@@ -331,7 +346,7 @@ class CrossValidationTrainer:
                     **self.current_train_metrics,
                 }
 
-                self.fabric.call(
+                self.apply_callback(
                     "on_before_log_metrics", metrics=metrics, optimizer=optimizer
                 )
                 self.fabric.log_dict(
@@ -359,20 +374,17 @@ class CrossValidationTrainer:
                 prepend_stage=not self.is_first_epoch,
             )
 
-            self.fabric.call(
+            self.apply_callback(
                 "on_train_batch_end_per_fold",
                 output=output,
                 batch=batch,
                 batch_idx=batch_idx,
             )
 
-            # add output values to progress bar
-            # self._format_iterable(iterable, self._current_train_return, "train")
-
             # only increase global step if optimizer stepped
             self.global_step_per_fold[self.current_fold] += int(should_optim_step)
 
-        self.fabric.call("on_train_epoch_end_per_fold", output=output)
+        self.apply_callback("on_train_epoch_end_per_fold", output=output)
 
     def training_step(self, model: ModelT, batch: Any, batch_idx: int) -> torch.Tensor:
         outputs: MetricType = convert_output_to_dict(
@@ -381,9 +393,9 @@ class CrossValidationTrainer:
 
         loss = outputs["loss"]
 
-        self.fabric.call("on_before_backward", loss=loss)
+        self.apply_callback("on_before_backward", loss=loss)
         self.fabric.backward(loss)
-        self.fabric.call("on_after_backward")
+        self.apply_callback("on_after_backward")
 
         # avoid gradients in stored/accumulated values -> prevents potential OOM
         self.current_train_metrics = cast(
@@ -451,6 +463,7 @@ class CrossValidationTrainer:
         """Whether to currently run validation."""
         return self.current_epoch % self.config.validation_frequency == 0
 
+    @torch.no_grad()
     def val_loop(
         self,
         model: ModelT,
@@ -463,13 +476,13 @@ class CrossValidationTrainer:
             model: the LightningModule to evaluate
             val_loader: The dataloader yielding the validation batches.
         """
-        self.fabric.call(
-            "on_validation_start_per_fold", model=model
-        )  # calls `model.eval()`
-        torch.set_grad_enabled(False)
 
         n_batches = len(val_loader)
         batch_limit = self._limit_batches(n_batches, self.config.limit_val_batches)
+
+        self.apply_callback(
+            "on_validation_start_per_fold", model=model, total=batch_limit
+        )  # calls `model.eval()`
 
         for batch_idx, batch in enumerate(val_loader):
             # end epoch if stopping training completely or
@@ -477,11 +490,10 @@ class CrossValidationTrainer:
             if self.should_stop or batch_idx >= batch_limit:
                 break
 
-            self.fabric.call(
+            self.apply_callback(
                 "on_validation_batch_start_per_fold",
                 batch=batch,
                 batch_idx=batch_idx,
-                total=batch_limit,
                 current_fold=self.current_fold,
             )
 
@@ -502,7 +514,7 @@ class CrossValidationTrainer:
                 **out,
             }
 
-            self.fabric.call(
+            self.apply_callback(
                 "on_before_log_metrics", metrics=metrics, optimizer=optimizer
             )
             self.fabric.log_dict(
@@ -510,7 +522,7 @@ class CrossValidationTrainer:
                 step=self.global_step_per_fold[self.current_fold] - 1,
             )
 
-            self.fabric.call(
+            self.apply_callback(
                 "on_validation_batch_end_per_fold",
                 output=out,
                 batch=batch,
@@ -526,9 +538,6 @@ class CrossValidationTrainer:
                 output=out,
                 fold=self.current_fold,
             )
-            # self._current_val_metrics_per_fold["loss"][
-            #     self.current_fold
-            # ] += output_getter(out)
 
         # avg fold level loss by number of batches/steps taken
         apply_to_collection(
@@ -536,17 +545,14 @@ class CrossValidationTrainer:
             dtype=torch.Tensor,
             function=partial(fold_idiv, value=batch_limit, fold=self.current_fold),
         )
-        # self._current_val_metrics_per_fold["loss"][
-        #   self.current_fold] /= batch_limit_idx
-        self.fabric.call("on_validation_epoch_end_per_fold")
-        torch.set_grad_enabled(True)
-        self.fabric.call("on_validation_end_per_fold", trainer=self)
+
+        self.apply_callback("on_validation_end_per_fold", trainer=self)
 
     def load(self, path: Path) -> FoldState:
         """Loads a checkpoint from a given file into state.
 
         Args:
-            state: a mapping contaning model, optimizer and lr scheduler
+            state: a mapping containing model, optimizer and lr scheduler
             path: the path to load the checkpoint from
         """
         state = dict()
@@ -558,52 +564,122 @@ class CrossValidationTrainer:
         if remainder:
             raise RuntimeError(f"Unused Checkpoint Values: {remainder}")
 
-        return FoldState.parse_obj(state)
+        return FoldState.model_validate(state)
 
-    def load_all_folds(self, paths: list[Path]) -> dict[int, FoldState]:
+    def _keep_latest_checkpoints(self, paths: list[Path]) -> list[Path]:
+        import re
+        from operator import itemgetter
+
+        pattern = re.compile(r"epoch=(\d+)_fold=(\d+)")
+
+        path2ef = {
+            path: tuple(int(x) for x in match.groups())
+            for path in paths
+            if (match := pattern.search(path.name))
+        }
+        latest_epoch = max(path2ef.values(), key=itemgetter(0))[0]
+        latest_path2ef = {
+            path: (epoch, fold)
+            for path, (epoch, fold) in path2ef.items()
+            if epoch == latest_epoch
+        }
+
+        return sorted(latest_path2ef, key=latest_path2ef.__getitem__)
+
+    def load_all_folds(
+        self, checkpoint_dir: Path, ext: str = "ckpt"
+    ) -> dict[int, FoldState]:
+        paths = list(checkpoint_dir.glob(f"*.{ext}"))
+        ckpt_status: defaultdict[str, list[Path]] = defaultdict(list)
+        for path in paths:
+            name = path.name
+            if "training_complete" in name:
+                ckpt_status["timeout"].append(path)
+            elif "last" in name:
+                ckpt_status["last"].append(path)
+            else:
+                ckpt_status["default"].append(path)
+
         fold_manager: dict[int, FoldState] = dict()
+        if ckpt_status["timeout"]:
+            for path in ckpt_status["timeout"]:
+                # TODO: load checkpoints AND finish remaining checkpoints
+                pass
+
         for path in paths:
             # this should set self.current_fold
-            # TODO: will this introduce a race condition? idk
             state = self.load(path)
             fold_manager[self.current_fold] = state
         return fold_manager
 
+    def _save(
+        self,
+        state: FoldState,
+        fold: int = 0,
+        suffix: Optional[str] = None,
+        ext: str = "ckpt",
+        include_val_loss: bool = True,
+        **name_kwargs: Any,
+    ):
+        ser_state = state.model_dump()
+        ser_state.update(
+            global_step=self.global_step_per_fold[self.current_fold],
+            current_epoch=self.current_epoch,
+            current_fold=fold,
+        )
+
+        # use new dict for consistent key order
+        _name_kwargs = dict()
+        _name_kwargs["epoch"] = name_kwargs.get("epoch", self.current_epoch)
+        _name_kwargs["fold"] = name_kwargs.get("fold", fold)
+        if include_val_loss and not self.is_first_epoch:
+            _name_kwargs["loss"] = f"{self.current_val_metrics['loss']:.4f}"
+        else:
+            _name_kwargs.update(name_kwargs)
+
+        if suffix is not None:
+            _name_kwargs["suffix"] = suffix
+
+        # use suffix key as special nameless key
+        _name = "_".join(
+            f"{k}={v}" if k != "suffix" else str(v) for k, v in _name_kwargs.items()
+        )
+        name = f"{_name}.{ext}"
+        output = self.checkpoint_dir.joinpath(name)
+
+        self.fabric.save(output, ser_state)
+
     def save(
         self,
         states: FoldState | Mapping[int, FoldState],
-        name: Optional[str] = None,
+        suffix: Optional[str] = None,
+        ext: str = "ckpt",
+        include_val_loss: bool = False,
+        **name_kwargs,
     ):
         """Saves a checkpoint to the ``checkpoint_dir``
 
         Args:
             state: A mapping containing model, optimizer and lr scheduler.
         """
-
-        def _save(_state: FoldState, fold: int = 0, name: Optional[str] = None):
-            state = _state.dict()
-            state.update(
-                global_step=self.global_step_per_fold[self.current_fold],
-                current_epoch=self.current_epoch,
-                current_fold=fold,
-            )
-
-            if name is None:
-                output = self.checkpoint_dir.joinpath(
-                    f"epoch={self.current_epoch}_fold={fold}"
-                    f"_loss={self.current_val_metrics['loss']:.4f}.ckpt"
-                )
-            else:
-                assert "{fold}" in name
-                output = self.checkpoint_dir.joinpath(name.format(fold=fold))
-
-            self.fabric.save(output, state)
-
         if isinstance(states, Mapping):
             for fold, state in states.items():
-                _save(state, fold, name)
+                self._save(
+                    state=state,
+                    fold=fold,
+                    suffix=suffix,
+                    ext=ext,
+                    include_val_loss=include_val_loss,
+                    **name_kwargs,
+                )
         else:
-            _save(states, name=name)
+            self._save(
+                state=states,
+                suffix=suffix,
+                ext=ext,
+                include_val_loss=include_val_loss,
+                **name_kwargs,
+            )
 
     @staticmethod
     def get_latest_checkpoint(ckpt_dir: Path) -> Optional[Path]:
@@ -652,3 +728,13 @@ class CrossValidationTrainer:
     @property
     def is_global_zero(self) -> bool:
         return self.fabric.is_global_zero
+
+    def apply_callback(self, callback_name: str, **kwargs):
+        if callback_name not in self.__callbacks__:
+            raise RuntimeError(
+                f"Callback {callback_name} not found. "
+                "Allowed callbacks are: {self.__callbacks__}"
+            )
+        # all callbacks have a trainer kwarg
+        kwargs["trainer"] = self
+        self.fabric.call(callback_name, **kwargs)
