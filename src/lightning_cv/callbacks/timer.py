@@ -7,7 +7,7 @@ from typing import Any, Literal, Optional
 import lightning_cv as lcv
 from lightning_cv.typehints import MetricType
 
-from .callbacks import Callback
+from .base import Callback
 
 Intervals = Literal["epoch", "step", "fold", "immediately"]
 

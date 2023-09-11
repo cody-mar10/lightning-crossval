@@ -6,7 +6,7 @@ from typing import Literal, Optional, cast
 
 import lightning_cv as lcv
 
-from .callbacks import Callback
+from .base import Callback
 
 
 class ModelCheckpoint(Callback):

@@ -8,7 +8,7 @@ from lightning.pytorch.utilities.model_summary.model_summary import summarize
 
 import lightning_cv as lcv
 
-from .callbacks import Callback
+from .base import Callback
 
 
 class ModelSummary(Callback):

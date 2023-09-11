@@ -15,7 +15,7 @@ if find_spec("ipywidgets") is not None:
 else:
     from tqdm import tqdm as _tqdm
 
-from .callbacks import Callback
+from .base import Callback
 
 _PAD_SIZE = 5
 

@@ -8,7 +8,7 @@ import torch
 import lightning_cv as lcv
 from lightning_cv.typehints import MetricType
 
-from .callbacks import Callback
+from .base import Callback
 
 ComparisonOp = Callable[..., torch.Tensor]
 logger = logging.getLogger(__name__)

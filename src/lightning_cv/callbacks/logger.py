@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import lightning_cv as lcv
 
-from .callbacks import Callback
+from .base import Callback
 
 
 class LogFlusher(Callback):
