@@ -14,7 +14,7 @@ from optuna.trial import TrialState
 from pydantic import BaseModel, Field
 
 import lightning_cv as lcv
-from lightning_cv.callbacks import Callback
+from lightning_cv.callbacks.base import Callback
 from lightning_cv.module import BaseModelConfig
 from lightning_cv.typehints import (
     CrossValDataModuleT,

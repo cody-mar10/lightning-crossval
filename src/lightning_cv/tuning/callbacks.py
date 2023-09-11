@@ -10,7 +10,7 @@ import optuna
 import lightning_cv as lcv
 
 
-class TrialPruning(lcv.callbacks.Callback):
+class TrialPruning(lcv.callbacks.base.Callback):
     # this code is basically taken from the optuna pytorch lightning integration
     # and lightly modified to work with the custom CV Trainer in this module
     _EPOCH_KEY = "ddp_pl:epoch"

@@ -10,7 +10,8 @@ from lightning.fabric.wrappers import _FabricModule
 from pydantic import BaseModel, validator
 from torch.optim import Optimizer
 
-from .callbacks import Callback
+from lightning_cv.callbacks.base import Callback
+
 from .typehints import ModelT, Number, SchedulerConfigT
 
 
