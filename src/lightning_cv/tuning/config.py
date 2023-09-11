@@ -2,14 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from platform import python_version_tuple
-from typing import (
-    Annotated,
-    Generic,
-    Literal,
-    Optional,
-    Sequence,
-    TypeVar,
-)
+from typing import Annotated, Any, Generic, Literal, Optional, Sequence, TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -56,10 +49,19 @@ TunableType = Annotated[
     Field(discriminator="suggest"),
 ]
 TunableTypeTuple = (TunableInt, TunableFloat, TunableCategorical)
+MappingT = dict[str, dict[str, dict[str, Any]]]
 
 
 class HparamConfig(BaseModel):
     hparams: list[TunableType]
+
+    def mappings(self) -> MappingT:
+        mapping = {
+            hparam.name: hparam.map
+            for hparam in self.hparams
+            if isinstance(hparam, TunableCategorical) and hparam.map is not None
+        }
+        return mapping
 
 
 def load_config(file: str | Path) -> HparamConfig:
@@ -68,6 +70,11 @@ def load_config(file: str | Path) -> HparamConfig:
 
     validated_config = HparamConfig.model_validate(config)
     return validated_config
+
+
+def get_mappings(file: str | Path) -> MappingT:
+    config = load_config(file)
+    return config.mappings()
 
 
 def DummyHparamConfig() -> HparamConfig:
