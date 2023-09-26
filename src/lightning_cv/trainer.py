@@ -44,7 +44,6 @@ from .utils import (
 )
 
 
-# TODO: wrap fabric callbacks to assert correct methods are called
 class CrossValidationTrainer:
     __fabric_keys__ = {
         "accelerator",
@@ -210,7 +209,7 @@ class CrossValidationTrainer:
         # set up n_folds models and optimizers, and creates fold_manager attribute
         # also calls self.fabric.launch()
         self.setup(datamodule=datamodule, model_config=model_config)
-        self.apply_callback("on_train_start", trainer=self)
+        self.apply_callback("on_train_start")
         while not self.should_stop:
             # calls train_loop, val_loop, step_scheduler per fold
             self.cross_val_loop(datamodule=datamodule)
@@ -225,14 +224,14 @@ class CrossValidationTrainer:
             if self.current_epoch >= self.config.max_epochs:
                 break
 
-        self.apply_callback("on_train_end", trainer=self)
+        self.apply_callback("on_train_end")
         # reset for next fit call
         self.should_stop = False
 
     def cross_val_loop(self, datamodule: CrossValDataModuleT):
         # called once per epoch
         # train and validate each fold
-        self.apply_callback("on_train_fold_start", trainer=self)
+        self.apply_callback("on_train_fold_start")
         foldloaders = datamodule.train_val_dataloaders(shuffle=True)
         for fold, (train_loader, val_loader) in enumerate(foldloaders):
             train_loader, val_loader = self.fabric.setup_dataloaders(
@@ -281,7 +280,7 @@ class CrossValidationTrainer:
             function=self.__reset_fn__,
         )
 
-        self.apply_callback("on_train_fold_end", trainer=self)
+        self.apply_callback("on_train_fold_end")
 
     def train_loop(
         self,
@@ -484,6 +483,7 @@ class CrossValidationTrainer:
             "on_validation_start_per_fold", model=model, total=batch_limit
         )  # calls `model.eval()`
 
+        batch_idx = 0 # for mypy unbound local error
         for batch_idx, batch in enumerate(val_loader):
             # end epoch if stopping training completely or
             # max batches for this epoch reached
@@ -529,10 +529,9 @@ class CrossValidationTrainer:
                 batch_idx=batch_idx,
             )
 
-            # takes all metrics reported in out and adds in-place
+            # takes all metrics reported in out and add in-place
             # to the tmp storage at current_val_metrics_per_fold
-            # later after this batch-wise loop, the values in div
-            # by the number of batches that were passed
+            # then later divide by number of steps taken to avg
             validation_update(
                 current_metrics=self._current_val_metrics_per_fold,
                 output=out,
@@ -541,12 +540,23 @@ class CrossValidationTrainer:
 
         # avg fold level loss by number of batches/steps taken
         apply_to_collection(
-            self._current_val_metrics_per_fold,
+            data=self._current_val_metrics_per_fold,
             dtype=torch.Tensor,
-            function=partial(fold_idiv, value=batch_limit, fold=self.current_fold),
+            function=partial(
+                fold_idiv,
+                # in most cases the denom will just be the number of batches
+                # however, if using limit_val_batches, it will be the number of batches
+                # actually stepped, but occasionally if an external callback like
+                # a timer stops training, then the number of batches stepped will be
+                # less than the batch_limit. The batch_idx will then be the number
+                # of batches stepped. We need to +1 to avoid div by 0
+                # if in this scenario and no batches were stepped.
+                value=min(batch_limit, batch_idx + 1),
+                fold=self.current_fold,
+            ),
         )
 
-        self.apply_callback("on_validation_end_per_fold", trainer=self)
+        self.apply_callback("on_validation_end_per_fold")
 
     def load(self, path: Path) -> FoldState:
         """Loads a checkpoint from a given file into state.
