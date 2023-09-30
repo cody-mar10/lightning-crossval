@@ -97,21 +97,15 @@ class Timer(Callback):
     def _check_time_and_checkpoint(self, trainer: "lcv.CrossValidationTrainer"):
         self._check_time(trainer)
         if trainer.should_stop and self._save_latest:
-            current_fold = trainer.current_fold
             save_kwargs: dict[str, Any] = dict(suffix="latest", include_val_loss=False)
             for fold, state in trainer.fold_manager.items():
                 save_kwargs["states"] = state
                 save_kwargs["fold"] = fold
 
-                if fold < current_fold:
-                    save_kwargs["training_complete"] = True
-                elif fold == current_fold:
-                    if self._current_fold_training_complete:
-                        save_kwargs["training_complete"] = True
-                    else:
-                        save_kwargs["training_complete"] = False
-                else:
-                    save_kwargs["training_complete"] = False
+                # simplified since trainer now keeps track of this
+                save_kwargs["training_complete"] = bool(
+                    trainer._finished_cv_loop_per_fold[fold]
+                )
 
                 trainer.save(**save_kwargs)
 
