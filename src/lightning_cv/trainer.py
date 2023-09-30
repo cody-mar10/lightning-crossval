@@ -192,6 +192,9 @@ class CrossValidationTrainer:
             self._current_val_metrics_per_fold["loss"] = torch.zeros(
                 size=(len(self.fold_manager),), device=self.fabric.device
             )
+            self._finished_cv_loop_per_fold = torch.zeros(
+                size=(len(self.fold_manager),), device=self.fabric.device
+            ).bool()
 
             self.setup_complete = True
 
@@ -232,8 +235,16 @@ class CrossValidationTrainer:
         # called once per epoch
         # train and validate each fold
         self.apply_callback("on_train_fold_start")
+
+        # reset here - advt is once training is complete, this will keep history of
+        # per fold completeness
+        self._finished_cv_loop_per_fold.fill_(False)
+
         foldloaders = datamodule.train_val_dataloaders(shuffle=True)
         for fold, (train_loader, val_loader) in enumerate(foldloaders):
+            if self.should_stop:
+                break
+
             train_loader, val_loader = self.fabric.setup_dataloaders(
                 train_loader, val_loader
             )
@@ -260,6 +271,8 @@ class CrossValidationTrainer:
                 level="epoch",
                 current_value=self.current_epoch,
             )
+
+            self._finished_cv_loop_per_fold[fold] = True
         # update this value every epoch
         # this stores the average validation loss per fold
 
@@ -269,10 +282,24 @@ class CrossValidationTrainer:
             self.fabric.all_gather(self._current_val_metrics_per_fold),
         )
 
-        # current_val_metrics = average over folds
-        self.current_val_metrics = apply_to_collection(
-            val_metrics, dtype=torch.Tensor, function=torch.mean
-        )
+        if self._finished_cv_loop_per_fold.all():
+            # only update if all folds finished training and validating
+            # this will technically raise on error on the first epoch since
+            # self.current_val_metrics is not yet available -> but that's already
+            # indicates some problem anyway. Otherwise, the current_val_metrics
+            # will just be the previous val metrics. This will only happen
+            # when an external callback stops training early.
+            #
+            # The only callback that has the ability to stop training other than
+            # at the end of this fn with the "on_train_fold_end" callback is the
+            # Timer callback, and dot entering this block basically indicates
+            # training is about to stop anyway.
+
+            # current_val_metrics = average over folds
+            self.current_val_metrics = apply_to_collection(
+                val_metrics, dtype=torch.Tensor, function=torch.mean
+            )
+
         # reset values
         apply_to_collection(
             self._current_val_metrics_per_fold,
@@ -483,7 +510,7 @@ class CrossValidationTrainer:
             "on_validation_start_per_fold", model=model, total=batch_limit
         )  # calls `model.eval()`
 
-        batch_idx = 0 # for mypy unbound local error
+        batch_idx = 0  # for mypy unbound local error
         for batch_idx, batch in enumerate(val_loader):
             # end epoch if stopping training completely or
             # max batches for this epoch reached
