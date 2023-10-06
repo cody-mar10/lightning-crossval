@@ -83,6 +83,13 @@ class CrossValidationTrainer:
         fabric_kwargs = self.config.model_dump(include=self.__fabric_keys__)
         self.fabric = Fabric(**fabric_kwargs)
 
+        if self.config.gradient_clip_algorithm == "norm":
+            self.gradient_clip_kwargs = {"max_norm": self.config.gradient_clip_val}
+        else:
+            self.gradient_clip_kwargs = {"clip_val": self.config.gradient_clip_val}
+
+        self.apply_gradient_clipping = self.config.gradient_clip_val > 0.0
+
     @property
     def current_val_metrics(self) -> MetricType:
         if not hasattr(self, "_current_val_metrics"):
@@ -359,6 +366,13 @@ class CrossValidationTrainer:
                 # although some optimizers need a closure
                 # these are not compatibile with automatic precision scaling
                 self.training_step(model=model, batch=batch, batch_idx=batch_idx)
+                if self.apply_gradient_clipping:
+                    self.fabric.clip_gradients(
+                        module=model,  # type: ignore
+                        optimizer=optimizer,
+                        **self.gradient_clip_kwargs,  # type: ignore
+                    )
+
                 optimizer.step()
 
                 self.apply_callback("on_before_zero_grad", optimizer=optimizer)

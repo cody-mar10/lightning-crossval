@@ -7,7 +7,7 @@ from lightning.fabric.accelerators.accelerator import Accelerator
 from lightning.fabric.loggers.logger import Logger
 from lightning.fabric.strategies.strategy import Strategy
 from lightning.fabric.wrappers import _FabricModule
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, Field, validator
 from torch.optim import Optimizer
 
 from lightning_cv.callbacks.base import Callback
@@ -32,6 +32,7 @@ def validate_range(value: float, low: float, high: float):
 Accelerators = Literal["auto", "cpu", "gpu", "tpu"]
 Strategies = Literal["ddp", "ddp_spawn", "ddp_notebook", "fsdp", "auto"]
 Precision = Literal["32", "16-mixed", "bf16-mixed"]
+GradClipAlgorithms = Literal["norm", "value"]
 
 
 class CrossValidationTrainerConfig(BaseModel):
@@ -44,6 +45,8 @@ class CrossValidationTrainerConfig(BaseModel):
     loggers: Optional[Logger | list[Logger]] = None
     max_epochs: int = 1000
     grad_accum_steps: int = 1
+    gradient_clip_algorithm: GradClipAlgorithms = "norm"
+    gradient_clip_val: float = Field(0.0, ge=0.0)
     limit_train_batches: Number = 1.0
     limit_val_batches: Number = 1.0
     validation_frequency: int = 1
