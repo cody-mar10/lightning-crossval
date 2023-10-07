@@ -7,6 +7,7 @@ import torch
 
 import lightning_cv as lcv
 from lightning_cv.typehints import MetricType
+from lightning_cv.utils import StopReasons
 
 from .base import Callback
 
@@ -78,6 +79,7 @@ class EarlyStopping(Callback):
         trainer.should_stop = trainer.should_stop or should_stop
         if should_stop:
             self.stopped_epoch = trainer.current_epoch
+            trainer.status = StopReasons.NO_IMPROVEMENT
 
         if reason and self.verbose:
             self._log_info(trainer, reason)

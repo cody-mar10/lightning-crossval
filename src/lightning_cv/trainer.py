@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import logging
 import math
 import os
 from collections import defaultdict
 from copy import copy
-from functools import lru_cache, partial
+from functools import cached_property, partial
 from pathlib import Path
 from typing import Any, Literal, Mapping, Optional, cast
 
@@ -35,6 +36,7 @@ from .typehints import (
     SchedulerConfigT,
 )
 from .utils import (
+    StopReasons,
     convert_output_to_dict,
     detach,
     flatten_train_val_metrics,
@@ -42,6 +44,8 @@ from .utils import (
     is_distributed,
     validation_update,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class CrossValidationTrainer:
@@ -90,6 +94,8 @@ class CrossValidationTrainer:
 
         self.apply_gradient_clipping = self.config.gradient_clip_val > 0.0
 
+        self._status = StopReasons.NULL
+
     @property
     def current_val_metrics(self) -> MetricType:
         if not hasattr(self, "_current_val_metrics"):
@@ -103,8 +109,7 @@ class CrossValidationTrainer:
     def current_val_metrics(self, value: MetricType):
         self._current_val_metrics = value
 
-    @property
-    @lru_cache(1)
+    @cached_property
     def checkpoint_dir(self) -> Path:
         try:
             logger_expt_name = self.fabric.logger.name or "expt_0"
@@ -126,6 +131,17 @@ class CrossValidationTrainer:
     @property
     def is_distributed(self) -> bool:
         return is_distributed(self.fabric.strategy)
+
+    @property
+    def status(self) -> StopReasons:
+        return self._status
+
+    @status.setter
+    def status(self, value: Any):
+        if isinstance(value, StopReasons):
+            self._status = value
+        else:
+            raise TypeError(f"{value=} is not a valid StopReasons enum")
 
     def _standardize_callbacks(
         self, callbacks: Optional[Callback | list[Callback]] = None
@@ -237,6 +253,8 @@ class CrossValidationTrainer:
         self.apply_callback("on_train_end")
         # reset for next fit call
         self.should_stop = False
+
+        self.log_status()
 
     def cross_val_loop(self, datamodule: CrossValDataModuleT):
         # called once per epoch
@@ -789,3 +807,24 @@ class CrossValidationTrainer:
         # all callbacks have a trainer kwarg
         kwargs["trainer"] = self
         self.fabric.call(callback_name, **kwargs)
+
+    def log_status(self):
+        if self.is_global_zero:
+            if self.status == StopReasons.NULL:
+                msg = f"COMPLETE: Training {self.config.max_epochs} epochs completed."
+            elif self.status == StopReasons.NO_IMPROVEMENT:
+                msg = (
+                    "EARLY STOP: Training stopped early due to no improvement in "
+                    f"{self.config.monitor}"
+                )
+            elif self.status == StopReasons.TIMEOUT:
+                msg = "TIMEOUT: Training stopped early due to running out of time."
+            elif self.status == StopReasons.LOSS_NAN_OR_INF:
+                msg = "NAN/INF: Training stopped early due to NaN or Inf loss."
+            else:
+                msg = (
+                    "PRUNED: Training stopped early due to bad trial pruning during "
+                    "hyperparameter tuning."
+                )
+
+            logger.info(f"{msg}\n")

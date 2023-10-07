@@ -6,6 +6,7 @@ from typing import Any, Literal, Optional
 
 import lightning_cv as lcv
 from lightning_cv.typehints import MetricType
+from lightning_cv.utils import StopReasons
 
 from .base import Callback
 
@@ -93,6 +94,8 @@ class Timer(Callback):
             )
 
         trainer.should_stop = trainer.should_stop or should_stop
+        if should_stop:
+            trainer.status = StopReasons.TIMEOUT
 
     def _check_time_and_checkpoint(self, trainer: "lcv.CrossValidationTrainer"):
         self._check_time(trainer)

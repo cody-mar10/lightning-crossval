@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from enum import Enum, auto
 from typing import Literal, Mapping, Optional, cast
 
 import torch
@@ -12,6 +13,14 @@ from lightning.fabric.strategies.xla import XLAStrategy
 from .typehints import ForwardOutputType, MetricType, Number
 
 _DISTRIBUTED_STRATEGIES = (DDPStrategy, DeepSpeedStrategy, FSDPStrategy, XLAStrategy)
+
+
+class StopReasons(Enum):
+    TIMEOUT = auto()
+    NO_IMPROVEMENT = auto()
+    PRUNED_TRIAL = auto()
+    LOSS_NAN_OR_INF = auto()
+    NULL = auto()
 
 
 def is_distributed(strategy: Strategy) -> bool:

@@ -8,9 +8,11 @@ from typing import cast
 import optuna
 
 import lightning_cv as lcv
+from lightning_cv.callbacks.base import Callback
+from lightning_cv.utils import StopReasons
 
 
-class TrialPruning(lcv.callbacks.base.Callback):
+class TrialPruning(Callback):
     # this code is basically taken from the optuna pytorch lightning integration
     # and lightly modified to work with the custom CV Trainer in this module
     _EPOCH_KEY = "ddp_pl:epoch"
@@ -77,6 +79,8 @@ class TrialPruning(lcv.callbacks.base.Callback):
         if not should_stop:
             return
 
+        trainer.status = StopReasons.PRUNED_TRIAL
+
         if trainer.is_global_zero:
             # Update system_attr from global zero process.
             self._trial.storage.set_trial_system_attr(
@@ -90,10 +94,11 @@ class TrialPruning(lcv.callbacks.base.Callback):
         current_score = trainer.current_val_metrics[self.monitor].item()
         current_epoch = trainer.current_epoch
         should_stop = False
-
+        stop_reason = StopReasons.PRUNED_TRIAL
         if isnan(current_score) or isinf(current_score):
             # stop if we start seeing nan/inf
             should_stop = True
+            stop_reason = StopReasons.LOSS_NAN_OR_INF
 
         # stores current_score into the trial's intermediate values
         self._trial.report(current_score, current_epoch)
@@ -104,6 +109,7 @@ class TrialPruning(lcv.callbacks.base.Callback):
                 # both the trial must think it doesn't need to prune
                 # AND an external factors, like the occurence of nan loss
                 return
+            trainer.status = stop_reason
             raise optuna.TrialPruned(self.prune_message(epoch=current_epoch))
 
         # distributed training

@@ -1,14 +1,6 @@
-from . import (
-    callbacks,
-    config,
-    data,
-    module,
-    split,
-    trainer,
-    tuning,
-    typehints,
-    utils,
-)
+import logging
+
+from . import callbacks, config, data, module, split, trainer, tuning, typehints, utils
 from .__metadata__ import (
     __author__,
     __description__,
@@ -22,22 +14,6 @@ from .module import BaseModelConfig, CrossValModule, CrossValModuleMixin
 from .split import BaseCrossValidator, BaseGroupCrossValidator
 from .trainer import CrossValidationTrainer
 
-__all__ = [
-    "callbacks",
-    "config",
-    "data",
-    "module",
-    "split",
-    "trainer",
-    "tuning",
-    "typehints",
-    "utils",
-    "CrossValidationTrainerConfig",
-    "CrossValidationDataModule",
-    "BaseModelConfig",
-    "CrossValModule",
-    "CrossValModuleMixin",
-    "BaseCrossValidator",
-    "BaseGroupCrossValidator",
-    "CrossValidationTrainer",
-]
+_logger = logging.getLogger(__name__)
+_logger.setLevel(logging.INFO)
+_logger.addHandler(logging.StreamHandler())
