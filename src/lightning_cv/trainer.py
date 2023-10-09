@@ -302,11 +302,14 @@ class CrossValidationTrainer:
         # update this value every epoch
         # this stores the average validation loss per fold
 
-        # need to get all metrics in distributed setting
-        val_metrics = cast(
-            dict[str, torch.Tensor],
-            self.fabric.all_gather(self._current_val_metrics_per_fold),
-        )
+        if self.is_distributed:
+            # need to get all metrics in distributed setting
+            val_metrics = cast(
+                dict[str, torch.Tensor],
+                self.fabric.all_gather(self._current_val_metrics_per_fold),
+            )
+        else:
+            val_metrics = self._current_val_metrics_per_fold
 
         # BUG: for some reason this doesn't work
         # in CHTC trials stopped by timeouts are averaging as if
