@@ -246,11 +246,12 @@ class CrossValidationTrainer:
 
             # stopping condition on epoch level
             # don't change self.should_stop here
-            # reserver self.should_stop for external signals for stopping
+            # reserve self.should_stop for external signals for stopping
             if self.current_epoch >= self.config.max_epochs:
                 break
 
         self.apply_callback("on_train_end")
+
         # reset for next fit call
         self.should_stop = False
 
@@ -307,6 +308,12 @@ class CrossValidationTrainer:
             self.fabric.all_gather(self._current_val_metrics_per_fold),
         )
 
+        # BUG: for some reason this doesn't work
+        # in CHTC trials stopped by timeouts are averaging as if
+        # all were completed...
+        # however, this isn't the case with a local test
+        # so likely installation issue...
+        # most likely timer issue, but early stopping log messages may help diagnose
         if self._finished_cv_loop_per_fold.all():
             # only update if all folds finished training and validating
             # this will technically raise on error on the first epoch since
@@ -317,7 +324,7 @@ class CrossValidationTrainer:
             #
             # The only callback that has the ability to stop training other than
             # at the end of this fn with the "on_train_fold_end" callback is the
-            # Timer callback, and dot entering this block basically indicates
+            # Timer callback, and not entering this block basically indicates
             # training is about to stop anyway.
 
             # current_val_metrics = average over folds
@@ -388,6 +395,7 @@ class CrossValidationTrainer:
                     self.fabric.clip_gradients(
                         module=model,  # type: ignore
                         optimizer=optimizer,
+                        error_if_nonfinite=False,
                         **self.gradient_clip_kwargs,  # type: ignore
                     )
 
