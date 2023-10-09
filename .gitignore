@@ -8,3 +8,4 @@ test/
 *.ipynb
 .vscode/
 .env
+.mypy_cache/
