@@ -8,11 +8,11 @@ from typing import cast
 import optuna
 
 import lightning_cv as lcv
-from lightning_cv.callbacks.base import Callback
+from lightning_cv.callbacks.perf_monitor import ValPerfPlateauMonitor
 from lightning_cv.utils import StopReasons
 
 
-class TrialPruning(Callback):
+class TrialPruning(ValPerfPlateauMonitor):
     # this code is basically taken from the optuna pytorch lightning integration
     # and lightly modified to work with the custom CV Trainer in this module
     _EPOCH_KEY = "ddp_pl:epoch"
@@ -23,9 +23,10 @@ class TrialPruning(Callback):
     def __init__(
         self, trial: optuna.Trial, monitor: str = "loss", verbose: bool = False
     ):
+        super().__init__(monitor=monitor)
+
         self._trial = trial
         self.is_ddp_backend = False
-        self.monitor = monitor
         self.verbose = verbose
 
     def on_train_start(self, trainer: "lcv.CrossValidationTrainer"):
@@ -114,6 +115,12 @@ class TrialPruning(Callback):
 
         # distributed training
         self._distributed_check_prune(trainer, current_score, should_stop)
+
+    def on_validation_end_per_fold(self, trainer: lcv.CrossValidationTrainer):
+        super().on_validation_end_per_fold(trainer)
+
+        if trainer.should_stop:
+            raise optuna.TrialPruned(self.prune_message(epoch=trainer.current_epoch))
 
     def check_pruned(self):
         """Raise :class:`optuna.TrialPruned` manually if pruned.
