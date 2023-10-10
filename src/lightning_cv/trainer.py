@@ -38,7 +38,6 @@ from .typehints import (
 from .utils import (
     StopReasons,
     convert_output_to_dict,
-    detach,
     flatten_train_val_metrics,
     fold_idiv,
     is_distributed,
@@ -199,9 +198,9 @@ class CrossValidationTrainer:
                 model: ModelT = self.model_type(model_config)
                 model.estimated_steps = self.estimated_steps[fold]
                 config = self._parse_optimizers_schedulers(model.configure_optimizers())
+                optimizer: Optimizer
                 optimizer, scheduler_cfg = config
 
-                optimizer: Optimizer
                 # ignore fact that fabric returns a wrapper
                 # ignore setup takes a torch.nn.Module or a lightning.LightningModule
                 model, optimizer = self.fabric.setup(model, optimizer)  # type: ignore
@@ -469,7 +468,7 @@ class CrossValidationTrainer:
         # avoid gradients in stored/accumulated values -> prevents potential OOM
         self.current_train_metrics = cast(
             MetricType,
-            apply_to_collection(outputs, dtype=torch.Tensor, function=detach),
+            apply_to_collection(outputs, dtype=torch.Tensor, function=torch.detach_),
         )
 
         return loss
@@ -569,12 +568,6 @@ class CrossValidationTrainer:
 
             out: MetricType = convert_output_to_dict(
                 model.validation_step(batch, batch_idx)
-            )
-
-            # avoid gradients in stored/accumulated values -> prevents potential OOM
-            out = cast(
-                MetricType,
-                apply_to_collection(out, dtype=torch.Tensor, function=detach),
             )
 
             metrics = {
@@ -832,6 +825,11 @@ class CrossValidationTrainer:
                 msg = "TIMEOUT: Training stopped early due to running out of time."
             elif self.status == StopReasons.LOSS_NAN_OR_INF:
                 msg = "NAN/INF: Training stopped early due to NaN or Inf loss."
+            elif self.status == StopReasons.PERFORMANCE_STALLED:
+                msg = (
+                    "STALLED: Training stopped early due to performance stalling. "
+                    f"{self.config.monitor} is not improving during the monitored stage."
+                )
             else:
                 msg = (
                     "PRUNED: Training stopped early due to bad trial pruning during "
