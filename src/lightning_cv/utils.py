@@ -20,6 +20,7 @@ class StopReasons(Enum):
     NO_IMPROVEMENT = auto()
     PRUNED_TRIAL = auto()
     LOSS_NAN_OR_INF = auto()
+    PERFORMANCE_STALLED = auto()
     NULL = auto()
 
 
@@ -30,19 +31,11 @@ def is_distributed(strategy: Strategy) -> bool:
     return isinstance(strategy, _DISTRIBUTED_STRATEGIES)
 
 
-def detach(x: torch.Tensor) -> torch.Tensor:
-    return x.detach()
-
-
 def output_getter(out: ForwardOutputType, name: str = "loss") -> torch.Tensor:
     if isinstance(out, torch.Tensor):
         return out
 
     return out[name]
-
-
-def average_and_detach(x: torch.Tensor) -> torch.Tensor:
-    return x.mean().detach()
 
 
 def fold_idiv(per_fold_tensor: torch.Tensor, value: Number | torch.Tensor, fold: int):
