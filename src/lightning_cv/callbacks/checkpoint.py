@@ -35,11 +35,14 @@ class ModelCheckpoint(Callback):
         )
 
     def on_train_fold_end(self, trainer: "lcv.CrossValidationTrainer"):
-        # look at validation metrics at the end of "training" all folds
-        # for fold in fold -> this does train, val, scheduler_step
-        val_metric = cast(float, trainer.current_val_metrics[self.monitor].item())
-        if trainer.current_epoch % self.every_n_epochs == 0:
-            self._save_topk_ckpt(trainer, val_metric)
+        # need to check for this directly instead of using trainer property
+        # if training stops during the first epoch, this attribute will not exist
+        if hasattr(trainer, "_current_val_metrics"):
+            # look at validation metrics at the end of "training" all folds
+            # for fold in fold -> this does train, val, scheduler_step
+            val_metric = cast(float, trainer._current_val_metrics[self.monitor].item())
+            if trainer.current_epoch % self.every_n_epochs == 0:
+                self._save_topk_ckpt(trainer, val_metric)
 
     def _save_topk_ckpt(self, trainer: "lcv.CrossValidationTrainer", metric: float):
         if self.save_top_k == 0:
