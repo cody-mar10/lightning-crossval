@@ -392,4 +392,6 @@ class Tuner:
             # to the `optuna.Study` update its trial numbers
             self._trial_number += 1
 
+            trainer.log_status()
+
         return trainer.current_val_metrics[monitor].item()
