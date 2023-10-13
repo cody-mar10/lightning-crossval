@@ -36,6 +36,11 @@ class ValPerfPlateauMonitor(Callback):
         self.metrics.clear()
 
     def should_stop(self) -> bool:
+        if len(self.metrics) <= 1:
+            # likely due to timeout or some other external stop
+            # let that callback handle chaning trainer status
+            return False
+
         mean = self.mean()
         std = self.std(xbar=mean)
 
