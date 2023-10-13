@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from copy import copy
+from copy import deepcopy
 from dataclasses import asdict, is_dataclass
 from functools import partial
 from pathlib import Path
@@ -260,7 +260,7 @@ class Tuner:
         elif not isinstance(callbacks, list):
             callbacks = [callbacks]
         else:
-            callbacks = copy(callbacks)
+            callbacks = deepcopy(callbacks)
 
         return callbacks
 
@@ -361,7 +361,9 @@ class Tuner:
 
         self.trainer_config.loggers = loggers
 
-        callbacks = copy(self._callbacks)
+        # TODO: THESE NEED TO BE BRAND NEW PER TRIAL
+        # think we just really need a deep copy instead
+        callbacks = deepcopy(self._callbacks)
         callbacks.append(
             TrialPruning(trial=trial, monitor=monitor, verbose=self.verbose)
         )
