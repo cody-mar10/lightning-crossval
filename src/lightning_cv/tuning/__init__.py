@@ -1,6 +1,4 @@
-from . import config
-from .callbacks import TrialPruning
-from .hyperparameters import HparamRegistry
-from .tuner import Tuner
-
-__all__ = ["TrialPruning", "Tuner", "HparamRegistry", "config"]
+from lightning_cv.tuning import config
+from lightning_cv.tuning.callbacks import TrialPruning
+from lightning_cv.tuning.hyperparameters import HparamRegistry
+from lightning_cv.tuning.tuner import Tuner

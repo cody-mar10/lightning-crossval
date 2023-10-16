@@ -7,7 +7,7 @@ from typing import Mapping, Optional
 import optuna
 from lightning_utilities.core.apply_func import apply_to_collection
 
-from .config import (
+from lightning_cv.tuning.config import (
     HparamConfig,
     TunableCategorical,
     TunableType,

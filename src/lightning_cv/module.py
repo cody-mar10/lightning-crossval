@@ -7,7 +7,7 @@ from lightning import Fabric, LightningModule
 from lightning.pytorch.utilities.types import STEP_OUTPUT
 from pydantic import BaseModel
 
-from .typehints import ModelConfig
+from lightning_cv.typehints import ModelConfig
 
 
 class BaseModelConfig(BaseModel):

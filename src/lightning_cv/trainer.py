@@ -23,11 +23,10 @@ from lightning_cv.callbacks.logger import LogFlusher
 from lightning_cv.callbacks.mode import EvalMode, TrainMode
 from lightning_cv.callbacks.progress import TqdmProgressBar
 from lightning_cv.callbacks.summary import ModelSummary
-
-from .config import CrossValidationTrainerConfig, FoldState
-from .data import CrossValDataModuleT
-from .module import ModelConfig
-from .typehints import (
+from lightning_cv.config import CrossValidationTrainerConfig, FoldState
+from lightning_cv.data import CrossValDataModuleT
+from lightning_cv.module import ModelConfig
+from lightning_cv.typehints import (
     ConfigOptimizerOutput,
     MetricType,
     ModelT,
@@ -35,7 +34,7 @@ from .typehints import (
     OptimizerConfigT,
     SchedulerConfigT,
 )
-from .utils import (
+from lightning_cv.utils import (
     StopReasons,
     convert_output_to_dict,
     flatten_train_val_metrics,

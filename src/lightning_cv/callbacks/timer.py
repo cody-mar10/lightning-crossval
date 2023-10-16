@@ -5,10 +5,9 @@ from datetime import timedelta
 from typing import Any, Literal, Optional
 
 import lightning_cv as lcv
+from lightning_cv.callbacks import Callback
 from lightning_cv.typehints import MetricType
 from lightning_cv.utils import StopReasons
-
-from .base import Callback
 
 Intervals = Literal["epoch", "step", "fold", "immediately"]
 

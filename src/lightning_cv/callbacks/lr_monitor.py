@@ -3,9 +3,8 @@ from __future__ import annotations
 from torch.optim import Optimizer
 
 import lightning_cv as lcv
+from lightning_cv.callbacks import Callback
 from lightning_cv.typehints import KwargType
-
-from .base import Callback
 
 
 class LearningRateMonitor(Callback):

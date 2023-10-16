@@ -6,9 +6,19 @@ from lightning.fabric.utilities.types import LRScheduler
 from torch import Tensor
 from torch.optim import Optimizer
 
-from .data import CrossValDataModuleT, CVDataLoader, DataclassInstance, Stage
-from .module import ConfigOptimizerOutput, ModelConfig, ModelT
-from .split import CrossValidator, CVIterator, GroupCrossValidator, Int64Array
+from lightning_cv.split import (
+    CrossValidator,
+    CVIterator,
+    GroupCrossValidator,
+    Int64Array,
+)
+from lightning_cv.typehints.data import (
+    CrossValDataModuleT,
+    CVDataLoader,
+    DataclassInstance,
+    Stage,
+)
+from lightning_cv.typehints.module import ConfigOptimizerOutput, ModelConfig, ModelT
 
 Number = float | int
 KwargType = dict[str, Any]

@@ -11,8 +11,7 @@ from pydantic import BaseModel, Field, validator
 from torch.optim import Optimizer
 
 from lightning_cv.callbacks.base import Callback
-
-from .typehints import ModelT, Number, SchedulerConfigT
+from lightning_cv.typehints import ModelT, Number, SchedulerConfigT
 
 
 class FoldState(BaseModel):

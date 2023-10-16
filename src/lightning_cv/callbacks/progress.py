@@ -8,6 +8,7 @@ from lightning_utilities.core.apply_func import apply_to_collection
 from torch import Tensor
 
 import lightning_cv as lcv
+from lightning_cv.callbacks import Callback
 from lightning_cv.typehints import MetricType
 
 if find_spec("ipywidgets") is not None:
@@ -15,7 +16,6 @@ if find_spec("ipywidgets") is not None:
 else:
     from tqdm import tqdm as _tqdm
 
-from .base import Callback
 
 _PAD_SIZE = 5
 

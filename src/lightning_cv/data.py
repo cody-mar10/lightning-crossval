@@ -7,7 +7,13 @@ import torch
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader, Dataset
 
-from .typehints import CrossValidator, CVDataLoader, Int64Array, KwargType, Stage
+from lightning_cv.typehints import (
+    CrossValidator,
+    CVDataLoader,
+    Int64Array,
+    KwargType,
+    Stage,
+)
 
 
 class SimpleTensorDataset(Dataset):
@@ -63,6 +69,7 @@ class CrossValidationDataModule(LightningDataModule):
                 "allowed."
             )
 
+    # TODO: for sklearn compatibility, this may need to take args to .split
     def train_val_dataloaders(self, **dataloader_kwargs) -> CVDataLoader:
         train_kwargs, val_kwargs = self._split_train_val_kwargs(**dataloader_kwargs)
 
@@ -98,5 +105,4 @@ class CrossValidationDataModule(LightningDataModule):
         return self.dataloader_kwargs | kwargs
 
     def _from_numpy(self, *arrays: Int64Array) -> tuple[torch.Tensor, ...]:
-        tensors = [torch.from_numpy(array) for array in arrays]
-        return tuple(tensors)
+        return tuple(torch.from_numpy(array) for array in arrays)

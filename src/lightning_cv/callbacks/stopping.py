@@ -6,10 +6,9 @@ from typing import Callable, Literal, Optional
 import torch
 
 import lightning_cv as lcv
+from lightning_cv.callbacks import Callback
 from lightning_cv.typehints import MetricType
 from lightning_cv.utils import StopReasons
-
-from .base import Callback
 
 ComparisonOp = Callable[..., torch.Tensor]
 logger = logging.getLogger(__name__)
