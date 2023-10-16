@@ -16,6 +16,8 @@ from pydantic import BaseModel, Field
 import lightning_cv as lcv
 from lightning_cv.callbacks.base import Callback
 from lightning_cv.module import BaseModelConfig
+from lightning_cv.tuning.callbacks import TrialPruning
+from lightning_cv.tuning.hyperparameters import HparamRegistry, IntFloatStrDict, suggest
 from lightning_cv.typehints import (
     CrossValDataModuleT,
     DataclassInstance,
@@ -23,9 +25,6 @@ from lightning_cv.typehints import (
     ModelConfig,
     ModelT,
 )
-
-from .callbacks import TrialPruning
-from .hyperparameters import HparamRegistry, IntFloatStrDict, suggest
 
 TrialSuggestionFn = Callable[[optuna.Trial], IntFloatStrDict]
 ModelConfigSerializeFn = Callable[[ModelConfig], KwargType]
@@ -133,6 +132,8 @@ class _TrialUpdater(BaseModel):
 
 
 class Tuner:
+    current_trainer: lcv.CrossValidationTrainer
+
     def __init__(
         self,
         model_type: type[ModelT],
@@ -168,7 +169,7 @@ class Tuner:
 
         self.verbose = verbose
         self.experiment_name = experiment_name
-        self.trainer_config = trainer_config
+        self.trainer_config = trainer_config.model_copy(deep=True)
         self._init_logdir(logdir, clean_logdir_if_exists)
 
         self._callbacks = self._store_callbacks(self.trainer_config.callbacks)
@@ -370,7 +371,7 @@ class Tuner:
 
         self.trainer_config.callbacks = callbacks
 
-        trainer = lcv.CrossValidationTrainer(
+        self.current_trainer = lcv.CrossValidationTrainer(
             model_type=self.model_type, config=self.trainer_config
         )
 
@@ -382,7 +383,7 @@ class Tuner:
         datamodule = self._create_datamodule()
 
         try:
-            trainer.train_with_cross_validation(
+            self.current_trainer.train_with_cross_validation(
                 datamodule=datamodule, model_config=model_config
             )
         except optuna.TrialPruned as err:
@@ -394,6 +395,7 @@ class Tuner:
             # to the `optuna.Study` update its trial numbers
             self._trial_number += 1
 
-            trainer.log_status()
+            self.current_trainer.log_status()
+            self.trainer_config.callbacks = None
 
-        return trainer.current_val_metrics[monitor].item()
+        return self.current_trainer.current_val_metrics[monitor].item()
