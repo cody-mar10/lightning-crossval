@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-from functools import partial
 from math import isinf, isnan
 from typing import Literal, Optional, cast
 
 import lightning_cv as lcv
-
-from .base import Callback
+from lightning_cv.callbacks import Callback
 
 
 class ModelCheckpoint(Callback):
@@ -28,11 +26,18 @@ class ModelCheckpoint(Callback):
         self.mode = mode
 
         self.best_k_models: dict[int, float] = dict()
-        self.kth_best_model_epoch = -1
 
-        self.filter_fn = partial(
-            max if self.mode == "min" else min, key=self.best_k_models.__getitem__
-        )
+        self.filter_fn = max if self.mode == "min" else min
+
+    def worst_of_best_epochs(self) -> int:
+        if self.best_k_models:
+            # filter out worst of best models
+            # if minimizing value, then take max (worst) score of best models
+            # if maximizing value, then take min (worst) score of best models
+            return self.filter_fn(
+                self.best_k_models, key=self.best_k_models.__getitem__
+            )
+        return -1
 
     def on_train_fold_end(self, trainer: "lcv.CrossValidationTrainer"):
         # need to check for this directly instead of using trainer property
@@ -58,13 +63,10 @@ class ModelCheckpoint(Callback):
         # store current val loss
         self.best_k_models[trainer.current_epoch] = metric
 
-        # filter out worst of best models
-        # if minimizing value, then take max (worst) score of best models
-        # if maximizing value, then take min (worst) score of best models
-        self.kth_best_model_epoch = cast(int, self.filter_fn(self.best_k_models))
+        kth_best_model_epoch = self.worst_of_best_epochs()
 
         if len(self.best_k_models) == k + 1:
-            del_epoch = self.kth_best_model_epoch
+            del_epoch = kth_best_model_epoch
             if del_epoch != -1:
                 self.best_k_models.pop(del_epoch)
                 glob = self.__checkpoint_glob__.format(epoch=del_epoch)
