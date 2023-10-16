@@ -25,6 +25,8 @@ class HparamRegistry:
     def __init__(self, config: HparamConfig):
         self._hparams: IntFloatStrDict = dict()
         self._hparam_config = config
+        self._hparam_named_config = config.hparams_dict()
+        self._hparam_mapped_fields = config.mapped_values_to_category()
 
     def reset(self):
         self._hparams.clear()
@@ -55,14 +57,9 @@ class HparamRegistry:
 
         return x.name, trialed_value, x.parent
 
-    def register_hparams(self, trial: optuna.Trial):
-        hparams = apply_to_collection(
-            data=self._hparam_config.hparams,
-            dtype=TunableTypeTuple,
-            function=self._register,
-            trial=trial,
-        )
-
+    def reshape_hparams(
+        self, hparams: list[tuple[str, int | float | str, Optional[str]]]
+    ) -> IntFloatStrDict:
         nested_hparams = defaultdict(dict)
         # proxy hparams may map to an arbitrary number of other hparams that are dicts
         # ex: ProxyHparam has choices [a, b, c]
@@ -83,7 +80,46 @@ class HparamRegistry:
             else:
                 current[key] = value
 
-        self._hparams = dict(nested_hparams)
+        return dict(nested_hparams)
+
+    def resolve_forbidden_combinations(
+        self, hparams: IntFloatStrDict, trial: optuna.Trial
+    ):
+        if self._hparam_config.forbidden is None:
+            return
+
+        for combo in self._hparam_config.forbidden:
+            current_values = {key: hparams[key] for key in combo.keys()}
+            while current_values == combo:
+                current_values = dict()
+
+                for key in combo.keys():
+                    # try to get tunable type from top level
+                    tunable_type = self._hparam_named_config.get(key, None)
+                    if tunable_type is None:
+                        # otherwise the key is the innermost mapped value, so we need to
+                        # get parent level key, then get the tunable type from that
+                        tunable_type = self._hparam_named_config[
+                            self._hparam_mapped_fields[key]
+                        ]
+                    _, new_value, parent = self._register(tunable_type, trial)
+                    current_values[key] = new_value
+
+            hparams.update(current_values)
+
+    def register_hparams(self, trial: optuna.Trial):
+        hparams = apply_to_collection(
+            data=self._hparam_config.hparams,
+            dtype=TunableTypeTuple,
+            function=self._register,
+            trial=trial,
+        )
+
+        hparams = self.reshape_hparams(hparams)
+
+        self.resolve_forbidden_combinations(hparams, trial)
+
+        self._hparams = hparams
 
 
 def suggest(trial: optuna.Trial, registry: HparamRegistry) -> IntFloatStrDict:

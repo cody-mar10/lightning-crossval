@@ -4,7 +4,7 @@ from pathlib import Path
 from platform import python_version_tuple
 from typing import Annotated, Any, Generic, Literal, Optional, Sequence, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 if python_version_tuple() >= ("3", "11", "0"):  # pragma: >=3.11 cover
     import tomllib as tomli
@@ -54,6 +54,7 @@ MappingT = dict[str, dict[str, dict[str, Any]]]
 
 class HparamConfig(BaseModel):
     hparams: list[TunableType]
+    forbidden: Optional[list[dict]] = None
 
     def mappings(self) -> MappingT:
         mapping = {
@@ -63,12 +64,72 @@ class HparamConfig(BaseModel):
         }
         return mapping
 
+    def hparams_dict(self) -> dict[str, TunableType]:
+        return {h.name: h for h in self.hparams}
 
-def load_config(file: str | Path) -> HparamConfig:
+    def mapped_values_to_category(self) -> dict[str, str]:
+        return {
+            key: field
+            for field, mapping in self.mappings().items()
+            for value in mapping.values()
+            for key in value.keys()
+        }
+
+    @model_validator(mode="after")
+    def map_forbidden(self):
+        if self.forbidden is not None:
+            named_config = self.hparams_dict()
+
+            new_forbidden: list[dict[str, Any]] = list()
+            for combo in self.forbidden:
+                new_combo = dict()
+                for key in combo.keys():
+                    tunable_type = named_config[key]
+
+                    if (
+                        isinstance(tunable_type, TunableCategorical)
+                        and tunable_type.map is not None
+                    ):
+                        new_key = tunable_type.map[combo[key]]
+                        if isinstance(new_key, dict):
+                            new_combo.update(new_key)
+                        else:
+                            new_combo[key] = new_key
+                    else:
+                        new_combo[key] = combo[key]
+                new_forbidden.append(new_combo)
+            self.forbidden = new_forbidden
+        return self
+
+
+def load_config(file: str | Path, strict: bool = True) -> HparamConfig:
     with open(file, "rb") as fp:
         config = tomli.load(fp)
 
     validated_config = HparamConfig.model_validate(config)
+
+    if strict and validated_config.forbidden is not None:
+        field_names = set()
+
+        for h in validated_config.hparams:
+            field_names.add(h.name)
+
+            if isinstance(h, TunableCategorical) and h.map is not None:
+                for key, value in h.map.items():
+                    if isinstance(value, dict):
+                        field_names.update(value.keys())
+                    else:
+                        field_names.update(key)
+
+        forbidden_names = set(
+            key for combo in validated_config.forbidden for key in combo.keys()
+        )
+
+        if not all(name in field_names for name in forbidden_names):
+            raise ValueError(
+                "Forbidden hparams must be a subset of the hparams defined in the config."
+            )
+
     return validated_config
 
 
