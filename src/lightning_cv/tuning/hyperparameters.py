@@ -2,18 +2,17 @@ from __future__ import annotations
 
 from collections import defaultdict
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import Mapping
 
 import optuna
-from lightning_utilities.core.apply_func import apply_to_collection
 
 from lightning_cv.tuning.config import (
     HparamConfig,
     TunableCategorical,
     TunableType,
-    TunableTypeTuple,
     load_config,
 )
+from lightning_cv.tuning.utils import FrozenDict
 
 TrialedValue = int | float | str
 IntFloatStrDict = dict[str, TrialedValue | dict[str, TrialedValue]]
@@ -23,43 +22,44 @@ class HparamRegistry:
     __suggest_fields__ = {"low", "high", "step", "log", "choices", "name"}
 
     def __init__(self, config: HparamConfig):
-        self._hparams: IntFloatStrDict = dict()
-        self._hparam_config = config
-        self._hparam_named_config = config.hparams_dict()
-        self._hparam_mapped_fields = config.mapped_values_to_category()
-
-    def reset(self):
-        self._hparams.clear()
-
-    @property
-    def hparams(self):
-        if not self._hparams:
-            raise RuntimeError(
-                "There are no trialed hyperparameters. You must call the "
-                "`.register_hparams` method with an `optuna.Trial` object."
-            )
-        return self._hparams
+        self.config = config
+        self.named_config = config.hparams_dict()
+        self.uniq_forbidden_combos = config.unique_forbidden_combos()
 
     @classmethod
     def from_file(cls, config_file: str | Path):
         config = load_config(config_file)
         return cls(config)
 
-    def _register(
-        self, x: TunableType, trial: optuna.Trial
-    ) -> tuple[str, TrialedValue, Optional[str]]:
+    def _register(self, x: TunableType, trial: optuna.Trial, resample: bool = False):
         method = f"suggest_{x.suggest}"
         method_kwargs = x.model_dump(include=self.__suggest_fields__)
-        trialed_value: TrialedValue = getattr(trial, method)(**method_kwargs)
 
-        if isinstance(x, TunableCategorical) and x.map is not None:
-            trialed_value = x.map[trialed_value]
+        if x.name in trial.distributions and resample:
+            # need to delete previously sampled value
+            # otherwise this will just keep returning the same value
+            del trial._cached_frozen_trial.distributions[x.name]
 
-        return x.name, trialed_value, x.parent
+        # no need to return since this will be part of trial.params
+        getattr(trial, method)(**method_kwargs)
 
-    def reshape_hparams(
-        self, hparams: list[tuple[str, int | float | str, Optional[str]]]
-    ) -> IntFloatStrDict:
+    def _resolve_forbidden_combinations(self, trial: optuna.Trial):
+        if self.config.forbidden is None or self.uniq_forbidden_combos is None:
+            return
+
+        hparams = trial.params
+        for keys in self.uniq_forbidden_combos:
+            current = FrozenDict({key: hparams[key] for key in keys})
+
+            while current in self.config.forbidden:
+                new: IntFloatStrDict = dict()
+                for key in keys:
+                    tunable_type = self.named_config[key]
+                    self._register(tunable_type, trial, resample=True)
+                    new[key] = trial.params[key]
+                current = FrozenDict(new)
+
+    def _nest_hparams(self, trial: optuna.Trial) -> IntFloatStrDict:
         nested_hparams = defaultdict(dict)
         # proxy hparams may map to an arbitrary number of other hparams that are dicts
         # ex: ProxyHparam has choices [a, b, c]
@@ -67,13 +67,22 @@ class HparamRegistry:
         # thus, if anything mapped, unnest and remove proxy hparam
 
         # further, need to convert to the correct nesting for the model config
-        for key, value, parent in hparams:
+        for key, value in trial.params.items():
+            type_config = self.named_config[key]
+            parent = self.named_config[key].parent
+
             if parent is not None:
                 # create a new subdict with the parent as the key
                 current: dict = nested_hparams[parent]
             else:
                 # otherwise add keys to root level
                 current = nested_hparams
+
+            if (
+                isinstance(type_config, TunableCategorical)
+                and type_config.map is not None
+            ):
+                value = type_config.map[value]
 
             if isinstance(value, Mapping):
                 current.update(value)
@@ -82,47 +91,13 @@ class HparamRegistry:
 
         return dict(nested_hparams)
 
-    def resolve_forbidden_combinations(
-        self, hparams: IntFloatStrDict, trial: optuna.Trial
-    ):
-        if self._hparam_config.forbidden is None:
-            return
-
-        for combo in self._hparam_config.forbidden:
-            current_values = {key: hparams[key] for key in combo.keys()}
-            while current_values == combo:
-                current_values = dict()
-
-                for key in combo.keys():
-                    # try to get tunable type from top level
-                    tunable_type = self._hparam_named_config.get(key, None)
-                    if tunable_type is None:
-                        # otherwise the key is the innermost mapped value, so we need to
-                        # get parent level key, then get the tunable type from that
-                        tunable_type = self._hparam_named_config[
-                            self._hparam_mapped_fields[key]
-                        ]
-                    _, new_value, parent = self._register(tunable_type, trial)
-                    current_values[key] = new_value
-
-            hparams.update(current_values)
-
     def register_hparams(self, trial: optuna.Trial):
-        hparams = apply_to_collection(
-            data=self._hparam_config.hparams,
-            dtype=TunableTypeTuple,
-            function=self._register,
-            trial=trial,
-        )
+        for hparam in self.config.hparams:
+            self._register(hparam, trial, False)
 
-        hparams = self.reshape_hparams(hparams)
-
-        self.resolve_forbidden_combinations(hparams, trial)
-
-        self._hparams = hparams
+        self._resolve_forbidden_combinations(trial)
+        return self._nest_hparams(trial)
 
 
 def suggest(trial: optuna.Trial, registry: HparamRegistry) -> IntFloatStrDict:
-    registry.reset()
-    registry.register_hparams(trial)
-    return registry.hparams
+    return registry.register_hparams(trial)
