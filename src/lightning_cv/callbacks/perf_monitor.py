@@ -15,10 +15,12 @@ class ValPerfPlateauMonitor(Callback):
         monitor="loss",
         min_metric: float = 1e-3,
         threshold_std: float = 1e-6,
+        min_epochs: int = 3,
     ):
         self.monitor = monitor
         self.min_metric = min_metric
         self.threshold_std = threshold_std
+        self.min_epochs = min_epochs
 
         self.metrics: list[float] = list()
 
