@@ -119,12 +119,17 @@ class TrialPruning(ValPerfPlateauMonitor):
     def on_validation_end_per_fold(self, trainer: lcv.CrossValidationTrainer):
         super().on_validation_end_per_fold(trainer)
 
-        if trainer.should_stop and trainer.current_epoch < self.min_epochs:
+        if (
+            trainer.should_stop
+            and trainer.current_epoch < self.min_epochs
+            and trainer.status != StopReasons.TIMEOUT
+        ):
             # if we have trained a sufficient number of epochs just report the value
             # otherwise prune the trial
+            # also don't prune for a timeout, which would stop the trainer
             raise optuna.TrialPruned(self.prune_message(epoch=trainer.current_epoch))
 
-            # immediately after this, the current_val_metrics will be calculated
+            # immediately after this, the current_val_metrics will be calculated and reported
 
     def check_pruned(self):
         """Raise :class:`optuna.TrialPruned` manually if pruned.
