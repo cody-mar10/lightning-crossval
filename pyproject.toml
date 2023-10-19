@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lightning-cv"
-version = "0.3.2"
+version = "0.4.0"
 authors = [{ name = "Cody Martin", email = "codycmar10@gmail.com" }]
 description = "Cross validation using Lightning Fabric"
 readme = "README.md"
