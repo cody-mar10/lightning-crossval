@@ -33,3 +33,6 @@ line-length = 90
 
 [tool.coverage.run]
 plugins = ["covdefaults"]
+
+[tool.setuptools.package-data]
+lightning_cv = ["py.typed"]
