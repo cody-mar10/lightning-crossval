@@ -9,3 +9,4 @@ test/
 .vscode/
 .env
 .mypy_cache/
+build/
