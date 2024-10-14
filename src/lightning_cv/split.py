@@ -114,6 +114,7 @@ class ImbalancedLeaveOneGroupOut(BaseGroupCrossValidator):
     def get_n_splits(self) -> int:
         return self.n_folds
 
+    # TODO: this needs to wrap index style splitters like sklearn's
     def split(self) -> CVIterator:
         for fold_idx, group_id in enumerate(self.uniq_groups):
             if fold_idx == 0:
