@@ -5,7 +5,7 @@ test/
 *_kernels/
 *lightning_logs/
 *lightning_root/
-*.ipynb
+src/**/*.ipynb
 .vscode/
 .env
 .mypy_cache/
