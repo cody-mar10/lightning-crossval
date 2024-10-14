@@ -202,6 +202,9 @@ class CrossValidationTrainer:
 
                 # ignore fact that fabric returns a wrapper
                 # ignore setup takes a torch.nn.Module or a lightning.LightningModule
+                # BUG: for some reason fabric will add lightningmodules to the callbacks
+                # this was not intended and was added with commit bf2af0e of lightning
+                # however, this package was not developed with this in mind
                 model, optimizer = self.fabric.setup(model, optimizer)  # type: ignore
 
                 self.fold_manager[fold] = FoldState(
@@ -216,6 +219,16 @@ class CrossValidationTrainer:
             self._finished_cv_loop_per_fold = torch.zeros(
                 size=(len(self.fold_manager),), device=self.fabric.device
             ).bool()
+
+            # need to remove model from callbacks since this gets added in later version of lightning
+            # this breaks everything...
+            callbacks = [
+                callback
+                for callback in self.fabric._callbacks
+                if not isinstance(callback, self.model_type)
+            ]
+
+            self.fabric._callbacks = callbacks
 
             self.setup_complete = True
 
