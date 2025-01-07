@@ -1,15 +1,18 @@
-from __future__ import annotations
-
 import json
+from logging import getLogger
 from math import isinf, isnan
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import optuna
 
-import lightning_cv as lcv
 from lightning_cv.callbacks.perf_monitor import ValPerfPlateauMonitor
-from lightning_cv.utils import StopReasons
+from lightning_cv.utils.stopping import StopReasons
+
+if TYPE_CHECKING:
+    from lightning_cv.trainer import CrossValidationTrainer
+
+logger = getLogger(__name__)
 
 
 class TrialPruning(ValPerfPlateauMonitor):
@@ -29,7 +32,7 @@ class TrialPruning(ValPerfPlateauMonitor):
         self.is_ddp_backend = False
         self.verbose = verbose
 
-    def on_train_start(self, trainer: "lcv.CrossValidationTrainer"):
+    def on_train_start(self, trainer: "CrossValidationTrainer"):
         self.is_ddp_backend = trainer.is_distributed
         if self.is_ddp_backend:
             if trainer.is_global_zero:
@@ -39,19 +42,19 @@ class TrialPruning(ValPerfPlateauMonitor):
                     dict(),
                 )
 
-        print(
+        logger.info(
             f"\n{self._SEPARATOR} Trial {self._trial._trial_id-1} BEGIN {self._SEPARATOR}"
             "\n"
         )
 
-    def on_train_end(self, trainer: "lcv.CrossValidationTrainer"):
-        print(
+    def on_train_end(self, trainer: "CrossValidationTrainer"):
+        logger.info(
             f"\n{self._SEPARATOR} Trial {self._trial._trial_id-1} END {self._SEPARATOR}\n"
         )
 
     def _distributed_check_prune(
         self,
-        trainer: "lcv.CrossValidationTrainer",
+        trainer: "CrossValidationTrainer",
         current_score: float,
         should_stop: bool = False,
     ):
@@ -91,7 +94,7 @@ class TrialPruning(ValPerfPlateauMonitor):
                 self._trial._trial_id, self._EPOCH_KEY, current_epoch
             )
 
-    def on_train_fold_end(self, trainer: "lcv.CrossValidationTrainer"):
+    def on_train_fold_end(self, trainer: "CrossValidationTrainer"):
         current_score = trainer.current_val_metrics[self.monitor].item()
         current_epoch = trainer.current_epoch
         should_stop = False
@@ -116,7 +119,7 @@ class TrialPruning(ValPerfPlateauMonitor):
         # distributed training
         self._distributed_check_prune(trainer, current_score, should_stop)
 
-    def on_validation_end_per_fold(self, trainer: lcv.CrossValidationTrainer):
+    def on_validation_end_per_fold(self, trainer: "CrossValidationTrainer"):
         super().on_validation_end_per_fold(trainer)
 
         if (
