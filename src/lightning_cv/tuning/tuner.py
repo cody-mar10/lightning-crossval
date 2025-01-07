@@ -1,167 +1,53 @@
-from __future__ import annotations
-
 from copy import deepcopy
-from dataclasses import asdict, is_dataclass
-from functools import partial
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional, cast
+from typing import Callable, Mapping, Optional, Union, cast
 
 import optuna
-from boltons.iterutils import get_path, remap
+from lightning import LightningModule
 from lightning.fabric.loggers.csv_logs import CSVLogger
 from lightning.fabric.loggers.logger import Logger
 from optuna.trial import TrialState
-from pydantic import BaseModel, Field
 
-import lightning_cv as lcv
-from lightning_cv.callbacks.base import Callback
-from lightning_cv.module import BaseModelConfig
+from lightning_cv.callbacks.utils import standardize_callbacks
+from lightning_cv.config import CrossValidationTrainerConfig
+from lightning_cv.data import BaseCVDataModule
+from lightning_cv.trainer import CrossValidationTrainer
 from lightning_cv.tuning.callbacks import TrialPruning
 from lightning_cv.tuning.hyperparameters import HparamRegistry, IntFloatStrDict, suggest
-from lightning_cv.typehints import (
-    CrossValDataModuleT,
-    DataclassInstance,
-    KwargType,
-    ModelConfig,
-    ModelT,
-)
+from lightning_cv.tuning.utils import _TrialUpdater
+from lightning_cv.typehints import FilePath
+from lightning_cv.typehints.config import ConfigT
+from lightning_cv.utils.serde import config_deserializer, config_serializer
 
 TrialSuggestionFn = Callable[[optuna.Trial], IntFloatStrDict]
-ModelConfigSerializeFn = Callable[[ModelConfig], KwargType]
-DataConfig = BaseModel | DataclassInstance | KwargType
-DataConfigSerializeFn = Callable[[Any], KwargType]
-
-
-class _TrialUpdater(BaseModel):
-    model: KwargType = Field(default_factory=dict)
-    data: KwargType = Field(default_factory=dict)
-    _updated: bool = False
-
-    @staticmethod
-    def _update(
-        parents: tuple, key: Any, value: Any, update_values: KwargType
-    ) -> bool | tuple:
-        """Tries to update leaf nodes based on an arbitrarily nested update schema.
-
-        Almost fits the `boltons.iterutils` `visit` API. It is recommended to create a
-        `functools.partial` object with this function.
-
-        Args:
-            parents (tuple): parent nodes to the current node
-            key (Any): current node
-            value (Any): value at current node
-            update_values (KwargType): arbitrarily nested update mapping
-
-        Returns:
-            bool | tuple: Returns True if at an intermediate node. Otherwise, returns the
-                new (node, value) map. See `boltons.iterutils.remap` for more info.
-        """
-
-        path = (*parents, key)
-        # try to get a value at the current path in update_values
-        # but default to the current value
-        new_value = (
-            # handles nesting
-            get_path(root=update_values, path=path, default=None)
-            # handles flat
-            or update_values.get(key, None)
-            # default
-            or value
-        )
-
-        # skip updating intermediate nodes
-        if isinstance(new_value, Mapping):
-            return True
-        # otherwise update leaf with new value
-        return key, new_value
-
-    def update(self, values: KwargType):
-        """Update all fields with new values.
-
-        The `values` argument can have a variety of shapes:
-
-        Example:
-        ```python
-        >>> model_cfg = {
-        ...     "in_dim": 64,
-        ...     "out_dim": 32,
-        ...     "optimizer": {"lr": 1e-3}
-        ... }
-        >>> data_cfg = {"batch_size": 64}
-
-        # now we want to try a new learning rate and a new batch size
-        # the following two `values` schemas work:
-
-        # 1. flat values
-        >>> config = _TrialUpdater(model=model_cfg, data=data_cfg)
-        >>> new_values = {"lr": 2.53e-4, "batch_size": 16}
-        >>> config.update(new_values)
-        >>> print(config.model)
-        {"in_dim": 64, "out_dim": 32, "optimizer": {"lr": 2.53e-4}}
-        >>> print(config.data)
-        {"batch_size": 16}
-
-        # 2. nested values
-        >>> config = _TrialUpdater(model=model_cfg, data=data_cfg)
-        >>> new_values = {
-        ...     "model": {"optimizer": {"lr": 2.53e-4}},
-        ...     "data": {"batch_size": 16}
-        ... }
-        >>> config.update(new_values)
-        >>> print(config.model)
-        {"in_dim": 64, "out_dim": 32, "optimizer": {"lr": 2.53e-4}}
-        >>> print(config.data)
-        {"batch_size": 16}
-
-        # Further, a combination of flat and nested values also works.
-        ```
-
-        Args:
-            values (KwargType): an arbitrarily nested map from subfield keys to new values
-        """
-        for key in self.model_fields:
-            current_values: KwargType = getattr(self, key)
-
-            # handles nested and flat update value schemas
-            update_values = values.get(key, values)
-            update_fn = partial(_TrialUpdater._update, update_values=update_values)
-            new_values = remap(root=current_values, visit=update_fn)
-
-            current_values.update(new_values)
-        self._updated = True
 
 
 class Tuner:
-    current_trainer: lcv.CrossValidationTrainer
+    current_trainer: CrossValidationTrainer
 
     def __init__(
         self,
-        model_type: type[ModelT],
-        model_config: ModelConfig,
-        datamodule_type: type[CrossValDataModuleT],
-        datamodule_config: DataConfig,
-        trainer_config: "lcv.CrossValidationTrainerConfig",
-        logdir: str | Path = Path("checkpoints"),
+        model_type: type[LightningModule],
+        model_config: ConfigT,
+        datamodule_type: type[BaseCVDataModule],
+        datamodule_config: ConfigT,
+        trainer_config: CrossValidationTrainerConfig,
+        logdir: FilePath = Path("checkpoints"),
         experiment_name: str = "exp0",
         clean_logdir_if_exists: bool = False,
         verbose: bool = False,
-        hparam_config_file: Optional[str | Path] = None,
-        model_config_serializer: Optional[ModelConfigSerializeFn] = None,
-        data_config_serializer: Optional[DataConfigSerializeFn] = None,
+        hparam_config_file: Optional[FilePath] = None,
     ):
         self._hparam_registry = self._init_hparam_registry(hparam_config_file)
 
         self.model_type = model_type
         # only store dict and type so that it can be updated with new trialed values
-        serialized_model_config = self._init_model_config(
-            model_config, model_config_serializer
-        )
+        serialized_model_config = config_serializer(model_config)
         self.model_config_type = type(model_config)
 
         self.datamodule_type = datamodule_type
-        serialized_data_config, self.data_config_type = self._init_data_config(
-            datamodule_config, data_config_serializer
-        )
+        self.data_config_type = type(datamodule_config)
+        serialized_data_config = config_serializer(datamodule_config)
 
         self.trial_updater = _TrialUpdater(
             model=serialized_model_config, data=serialized_data_config
@@ -169,70 +55,23 @@ class Tuner:
 
         self.verbose = verbose
         self.experiment_name = experiment_name
-        self.trainer_config = trainer_config.model_copy(deep=True)
+        self.trainer_config = trainer_config.copy(deep=True)
         self._init_logdir(logdir, clean_logdir_if_exists)
 
-        self._callbacks = self._store_callbacks(self.trainer_config.callbacks)
+        self._callbacks = standardize_callbacks(self.trainer_config.callbacks)
         self._logger_types = self._store_logger_types(self.trainer_config.loggers)
 
         self._trial_number = 0
 
-    def _init_model_config(
-        self,
-        model_config: ModelConfig | KwargType,
-        model_config_serializer: Optional[ModelConfigSerializeFn] = None,
-    ) -> KwargType:
-        if isinstance(model_config, (BaseModelConfig, BaseModel)):
-            # pydantic model
-            return model_config.model_dump()
-        elif is_dataclass(model_config):
-            # dataclasses.dataclass
-            return asdict(model_config)
-        elif isinstance(model_config, Mapping):
-            return model_config
-
-        if model_config_serializer is None:
-            raise ValueError(
-                "Model config is neither a `pydantic.BaseModel` nor a "
-                "`dataclasses.dataclass`. A serialization function to convert the "
-                "input model config to a dictionary is required if the config is not "
-                "already."
-            )
-        return model_config_serializer(model_config)
-
-    def _init_data_config(
-        self,
-        data_config: DataConfig,
-        data_config_serializer: Optional[DataConfigSerializeFn] = None,
-    ) -> tuple[KwargType, type]:
-        data_config_type = type(data_config)
-        if isinstance(data_config, (BaseModelConfig, BaseModel)):
-            # pydantic model
-            return data_config.model_dump(), data_config_type
-        elif is_dataclass(data_config):
-            # dataclasses.dataclass
-            return asdict(data_config), data_config_type
-        elif isinstance(data_config, Mapping):
-            return data_config, data_config_type
-
-        if data_config_serializer is None:
-            raise ValueError(
-                "Data config is neither a `pydantic.BaseModel` nor a "
-                "`dataclasses.dataclass`. A serialization function to convert the "
-                "input data config to a dictionary is required if the config is not "
-                "already."
-            )
-        return data_config_serializer(data_config), data_config_type
-
     def _init_hparam_registry(
-        self, config_file: Optional[str | Path]
+        self, config_file: Optional[FilePath]
     ) -> Optional[HparamRegistry]:
         if config_file is None:
             return None
 
         return HparamRegistry.from_file(config_file)
 
-    def _init_logdir(self, logdir: str | Path, clean_logdir_if_exists: bool = False):
+    def _init_logdir(self, logdir: FilePath, clean_logdir_if_exists: bool = False):
         if isinstance(logdir, str):
             logdir = Path(logdir)
 
@@ -253,20 +92,8 @@ class Tuner:
 
         actual_path.mkdir(exist_ok=True, parents=True)
 
-    def _store_callbacks(
-        self, callbacks: Optional[list[Callback] | Callback]
-    ) -> list[Callback]:
-        if callbacks is None:
-            callbacks = list()
-        elif not isinstance(callbacks, list):
-            callbacks = [callbacks]
-        else:
-            callbacks = deepcopy(callbacks)
-
-        return callbacks
-
     def _store_logger_types(
-        self, loggers: Optional[list[Logger] | Logger]
+        self, loggers: Union[list[Logger], Logger, None]
     ) -> list[type[Logger]]:
         # capture logger types only and reconstruct during tuning
         if loggers is not None:
@@ -279,23 +106,34 @@ class Tuner:
 
         return logger_types
 
-    def _create_datamodule(self) -> CrossValDataModuleT:
+    def _create_datamodule(self) -> BaseCVDataModule:
         # these should have already been updated, but check just in case
         self._check_hparams_updated()
         serialized_data_config = self.trial_updater.data
-        data_config = self.data_config_type(**serialized_data_config)
+        data_config = config_deserializer(serialized_data_config, self.data_config_type)
 
         if isinstance(data_config, Mapping):
-            return self.datamodule_type(**data_config)
+            try:
+                datamodule = self.datamodule_type(**data_config)
+            except TypeError:
+                # datamodule might expect the config as a single argument
+                # which is what is tried next
+                pass
+            else:
+                return datamodule
 
-        # otherwise datamodule must accept only a single config argument
+        # otherwise datamodule must accept only a single config argument, even if it could
+        # be a dict
         return self.datamodule_type(data_config)
 
-    def _create_model_config(self) -> ModelConfig:
+    def _create_model_config(self) -> ConfigT:
         # these should have already been updated, but check just in case
         self._check_hparams_updated()
         serialized_model_config = self.trial_updater.model
-        model_config = self.model_config_type(**serialized_model_config)
+        model_config = config_deserializer(
+            serialized_model_config, self.model_config_type
+        )
+
         return model_config
 
     def _check_hparams_updated(self):
@@ -326,6 +164,8 @@ class Tuner:
     def trial_number(self) -> int:
         return self._trial_number
 
+    # TODO: this is very heavily coupled with optuna... may want to try a refactor to add support
+    # for a few diff libs? particularly ray.tune since that supports multi GPU tuning
     def tune(
         self,
         trial: optuna.Trial,
@@ -352,18 +192,16 @@ class Tuner:
         # else: trialed_values must've been passed
 
         loggers = [
-            logger_type(  # type: ignore
-                root_dir=self.logdir,
-                name=self.experiment_name,
-                version=self._trial_number,
+            logger_type(
+                root_dir=self.logdir,  # type: ignore
+                name=self.experiment_name,  # type: ignore
+                version=self._trial_number,  # type: ignore
             )
             for logger_type in self._logger_types
         ]
 
         self.trainer_config.loggers = loggers
 
-        # TODO: THESE NEED TO BE BRAND NEW PER TRIAL
-        # think we just really need a deep copy instead
         callbacks = deepcopy(self._callbacks)
         callbacks.append(
             TrialPruning(trial=trial, monitor=monitor, verbose=self.verbose)
@@ -371,7 +209,7 @@ class Tuner:
 
         self.trainer_config.callbacks = callbacks
 
-        self.current_trainer = lcv.CrossValidationTrainer(
+        self.current_trainer = CrossValidationTrainer(
             model_type=self.model_type, config=self.trainer_config
         )
 
@@ -386,9 +224,6 @@ class Tuner:
             self.current_trainer.train_with_cross_validation(
                 datamodule=datamodule, model_config=model_config
             )
-        except optuna.TrialPruned as err:
-            # TODO: add optional pruning hook
-            raise err
         finally:
             # always increment trial number even if trial gets pruned
             # NOTE: this shouldn't be needed since this will mostly defer
