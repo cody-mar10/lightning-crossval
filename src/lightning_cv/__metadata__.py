@@ -1,6 +1,8 @@
 from importlib import metadata
 
-_data = metadata.metadata(__package__)
+package = __package__ or "lightning-cv"
+
+_data = metadata.metadata(package)
 __title__: str = _data["name"]
 __description__: str = _data["summary"]
 __version__: str = _data["version"]
