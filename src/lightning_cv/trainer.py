@@ -1,52 +1,61 @@
-from __future__ import annotations
-
+import enum
 import logging
 import math
-import os
-from collections import defaultdict
-from copy import copy
 from functools import cached_property, partial
 from pathlib import Path
-from typing import Any, Literal, Mapping, Optional, cast
+from typing import Any, Literal, Mapping, Optional, Union, cast
 
 import torch
-from lightning import Fabric
+from lightning import LightningDataModule, LightningModule
 from lightning.fabric.loggers.csv_logs import CSVLogger
 from lightning.fabric.utilities.types import LRScheduler
+from lightning.pytorch.utilities.types import OptimizerLRScheduler
 from lightning_utilities.core.apply_func import apply_to_collection
 from torch.optim import Optimizer
+from torch.optim.lr_scheduler import LRScheduler
 from torch.utils.data import DataLoader
 
-from lightning_cv.callbacks.base import Callback
+from lightning_cv.callbacks.base import Callback, CallbackT
 from lightning_cv.callbacks.checkpoint import ModelCheckpoint
 from lightning_cv.callbacks.logger import LogFlusher
 from lightning_cv.callbacks.mode import EvalMode, TrainMode
 from lightning_cv.callbacks.progress import TqdmProgressBar
 from lightning_cv.callbacks.summary import ModelSummary
+from lightning_cv.callbacks.utils import standardize_callbacks
 from lightning_cv.config import CrossValidationTrainerConfig, FoldState
-from lightning_cv.data import CrossValDataModuleT
-from lightning_cv.module import ModelConfig
+from lightning_cv.data import (
+    CV_DATAMODULE_METHOD_NAME,
+    BaseCVDataModule,
+    is_cross_val_datamodule,
+)
+from lightning_cv.fabric import Fabric
 from lightning_cv.typehints import (
-    ConfigOptimizerOutput,
+    KwargType,
     MetricType,
-    ModelT,
     Number,
     OptimizerConfigT,
     SchedulerConfigT,
 )
-from lightning_cv.utils import (
-    StopReasons,
+from lightning_cv.utils.checkpointing import CheckpointingMixin
+from lightning_cv.utils.foldutils import (
     convert_output_to_dict,
     flatten_train_val_metrics,
     fold_idiv,
-    is_distributed,
     validation_update,
 )
+from lightning_cv.utils.stopping import StopReasons
+from lightning_cv.utils.strategies import is_distributed
 
 logger = logging.getLogger(__name__)
 
 
-class CrossValidationTrainer:
+class TrainerState(enum.Enum):
+    TRAINING = enum.auto()
+    VALIDATING = enum.auto()
+    NOT_STOPPED = enum.auto()
+
+
+class CrossValidationTrainer(CheckpointingMixin):
     __fabric_keys__ = {
         "accelerator",
         "strategy",
@@ -60,14 +69,18 @@ class CrossValidationTrainer:
     __reset_fn__ = partial(torch.fill_, value=0.0)
     __callbacks__ = Callback.available_callbacks()
 
-    def __init__(self, model_type: type[ModelT], config: CrossValidationTrainerConfig):
+    def __init__(
+        self, model_type: type[LightningModule], config: CrossValidationTrainerConfig
+    ):
         self.config = config
         self.model_type = model_type
 
         self.global_step_per_fold: dict[int, int] = dict()
+        """Keeps track of the number of times the model in each fold has been stepped. In other
+        words, the number of times the model has been updated by an optimizer."""
+
         self.current_epoch: int = 0
         self.current_fold: int = 0
-        self.state = "train"
         self.setup_complete = False
         self.is_first_epoch = True
 
@@ -82,7 +95,7 @@ class CrossValidationTrainer:
 
         self._add_default_callbacks(self.config.callbacks)
 
-        fabric_kwargs = self.config.model_dump(include=self.__fabric_keys__)
+        fabric_kwargs = self.config.to_dict(include=self.__fabric_keys__)
         self.fabric = Fabric(**fabric_kwargs)
 
         if self.config.gradient_clip_algorithm == "norm":
@@ -92,7 +105,13 @@ class CrossValidationTrainer:
 
         self.apply_gradient_clipping = self.config.gradient_clip_val > 0.0
 
+        self._current_state = TrainerState.TRAINING
+        self._state_when_stopped = TrainerState.NOT_STOPPED
         self._status = StopReasons.NULL
+
+    @property
+    def num_folds(self) -> int:
+        return len(getattr(self, "fold_manager", {}))
 
     @property
     def current_val_metrics(self) -> MetricType:
@@ -107,8 +126,16 @@ class CrossValidationTrainer:
     def current_val_metrics(self, value: MetricType):
         self._current_val_metrics = value
 
+    # TODO: need to distinguish this from the root dir
+    # lightning uses: rootdir for lightning_root, and then log_dir for the current version
+    # especially since the config uses checkpoint dir
+    # and then this is different that
     @cached_property
     def checkpoint_dir(self) -> Path:
+        """Get the checkpoint directory for the CURRENT version of training.
+
+        Ex: lighting_root/lightning_logs/version_0
+        """
         try:
             logger_expt_name = self.fabric.logger.name or "expt_0"
             logger_version_no = self.fabric.logger.version or "version_0"
@@ -118,7 +145,7 @@ class CrossValidationTrainer:
                 checkpoint_dir = Path(self.fabric.logger.root_dir)
             else:
                 checkpoint_dir = Path("checkpoints")
-        except AttributeError:
+        except (AttributeError, IndexError):
             # no logger attached
             logger_expt_name = "expt_0"
             logger_version_no = "version_0"
@@ -138,25 +165,53 @@ class CrossValidationTrainer:
     def status(self, value: Any):
         if isinstance(value, StopReasons):
             self._status = value
+            if self._status != StopReasons.NULL:
+                self.state_when_stopped = self.current_state
         else:
             raise TypeError(f"{value=} is not a valid StopReasons enum")
 
-    def _standardize_callbacks(
-        self, callbacks: Optional[Callback | list[Callback]] = None
-    ) -> list[Callback]:
-        if callbacks is None:
-            callbacks = list()
-        elif isinstance(callbacks, Callback):
-            callbacks = [callbacks]
+    @property
+    def current_state(self) -> TrainerState:
+        return self._current_state
+
+    @current_state.setter
+    def current_state(self, value: Any):
+        if isinstance(value, TrainerState):
+            if value == TrainerState.NOT_STOPPED:
+                raise ValueError("Current state cannot be NOT_STOPPED")
+            self._current_state = value
         else:
-            callbacks = copy(callbacks)
+            raise TypeError(f"{value=} is not a valid TrainerState enum")
 
-        return callbacks
+    @property
+    def state_when_stopped(self) -> TrainerState:
+        return self._state_when_stopped
 
-    def _add_default_callbacks(
-        self, callbacks: Optional[Callback | list[Callback]] = None
-    ):
-        callbacks = self._standardize_callbacks(callbacks)
+    @state_when_stopped.setter
+    def state_when_stopped(self, value: Any):
+        if self.status == StopReasons.NULL or not self.should_stop:
+            raise ValueError(
+                "Cannot set state_when_stopped when trainer has not been signaled to stop."
+            )
+
+        if isinstance(value, TrainerState):
+            self._state_when_stopped = value
+        else:
+            raise TypeError(f"{value=} is not a valid TrainerState enum")
+
+    @property
+    def fold_manager(self) -> dict[int, FoldState]:
+        if not hasattr(self, "_fold_manager"):
+            raise AttributeError(
+                "`fold_manager` is not available. The `.setup()` must be called first with a "
+                "valid cross validation datamodule and a model config to initialize 1 model per "
+                "fold."
+            )
+
+        return self._fold_manager
+
+    def _add_default_callbacks(self, callbacks: CallbackT = None):
+        callbacks = standardize_callbacks(callbacks)
         callbacks.extend([TrainMode(), EvalMode(), LogFlusher(), TqdmProgressBar()])
 
         has_model_summary = False
@@ -175,27 +230,28 @@ class CrossValidationTrainer:
 
         self.config.callbacks = callbacks
 
-    def setup(self, datamodule: CrossValDataModuleT, model_config: ModelConfig):
+    @property
+    def callbacks(self) -> list[Callback]:
+        return self.config.callbacks  # type: ignore[return-type] <- should be standardized
+
+    def setup(self, datamodule: BaseCVDataModule, model_config):
         # only setup once
         if not self.setup_complete:
             self.fabric.launch()
             datamodule.setup("fit")
 
             # setup n_folds models and optimizers
-            self.fold_manager: dict[int, FoldState] = dict()
+            self._fold_manager: dict[int, FoldState] = dict()
             self.global_step_per_fold.clear()
             self.estimated_steps: dict[int, int] = dict()
-
-            if model_config.fabric is None:
-                model_config.fabric = self.fabric
 
             for fold, (train_loader, val_loader) in enumerate(
                 datamodule.train_val_dataloaders()
             ):
                 self.estimated_steps[fold] = self._estimated_steps(len(train_loader))
 
-                model: ModelT = self.model_type(model_config)
-                model.estimated_steps = self.estimated_steps[fold]
+                model = self.model_type(model_config)
+                setattr(model, "estimated_steps", self.estimated_steps[fold])
                 config = self._parse_optimizers_schedulers(model.configure_optimizers())
                 optimizer: Optimizer
                 optimizer, scheduler_cfg = config
@@ -205,7 +261,7 @@ class CrossValidationTrainer:
                 # BUG: for some reason fabric will add lightningmodules to the callbacks
                 # this was not intended and was added with commit bf2af0e of lightning
                 # however, this package was not developed with this in mind
-                model, optimizer = self.fabric.setup(model, optimizer)  # type: ignore
+                model, optimizer = self.fabric.setup(model, optimizer)  # type: ignore[return-value]
 
                 self.fold_manager[fold] = FoldState(
                     model=model, optimizer=optimizer, scheduler=scheduler_cfg
@@ -240,9 +296,20 @@ class CrossValidationTrainer:
 
         return max_estimated_steps
 
-    def train_with_cross_validation(
-        self, datamodule: CrossValDataModuleT, model_config: ModelConfig
-    ):
+    def train_with_cross_validation(self, datamodule: BaseCVDataModule, model_config):
+        if not is_cross_val_datamodule(datamodule):
+            is_lightning_module = isinstance(datamodule, LightningDataModule)
+            has_method = hasattr(datamodule, CV_DATAMODULE_METHOD_NAME)
+
+            raise ValueError(
+                "The provided datamodule MUST satisfy 2 constraints:\n"
+                "\t1. It must be a subclass of lightning.LightningDataModule\n"
+                "\t2. It must have a method train_val_dataloaders() that yields pairs of "
+                "dataloaders for training and validation."
+                f"Provided module is a LightningDataModule: {is_lightning_module}\n"
+                f"Provided module has method {CV_DATAMODULE_METHOD_NAME}: {has_method}"
+            )
+
         # set up n_folds models and optimizers, and creates fold_manager attribute
         # also calls self.fabric.launch()
         self.setup(datamodule=datamodule, model_config=model_config)
@@ -268,7 +335,7 @@ class CrossValidationTrainer:
 
         self.log_status()
 
-    def cross_val_loop(self, datamodule: CrossValDataModuleT):
+    def cross_val_loop(self, datamodule: BaseCVDataModule):
         # called once per epoch
         # train and validate each fold
         self.apply_callback("on_train_fold_start")
@@ -289,7 +356,7 @@ class CrossValidationTrainer:
             self.current_fold = fold
             state = self.fold_manager[fold]
             # ignore fact that lightning.fabric wraps model
-            model = cast(ModelT, state.model)
+            model = cast(LightningModule, state.model)
             optimizer = state.optimizer
             scheduler_cfg = state.scheduler
 
@@ -313,11 +380,10 @@ class CrossValidationTrainer:
         # update this value every epoch
         # this stores the average validation loss per fold
 
-        if self.is_distributed:
+        if self.is_distributed:  # pragma: no cover <- TODO: need to test distributed
             # need to get all metrics in distributed setting
             val_metrics = cast(
-                dict[str, torch.Tensor],
-                self.fabric.all_gather(self._current_val_metrics_per_fold),
+                MetricType, self.fabric.all_gather(self._current_val_metrics_per_fold)
             )
         else:
             val_metrics = self._current_val_metrics_per_fold
@@ -357,12 +423,12 @@ class CrossValidationTrainer:
 
     def train_loop(
         self,
-        model: ModelT,
+        model: LightningModule,
         optimizer: Optimizer,
         train_loader: DataLoader,
         scheduler_cfg: Optional[SchedulerConfigT] = None,
     ):
-        self.state = "train"
+        self.current_state = TrainerState.TRAINING
         n_batches = len(train_loader)
         batch_limit = self._limit_batches(n_batches, self.config.limit_train_batches)
 
@@ -391,11 +457,10 @@ class CrossValidationTrainer:
             )
 
             # check if optimizer should step in gradient accumulation
-            should_optim_step = (
-                self.global_step_per_fold[self.current_fold]
-                % self.config.grad_accum_steps
-                == 0
+            should_optim_step = self.should_do_something(
+                batch_idx, self.config.grad_accum_steps
             )
+
             if should_optim_step:
                 # currently only supports a single optimizer
                 self.apply_callback(
@@ -404,20 +469,27 @@ class CrossValidationTrainer:
 
                 # although some optimizers need a closure
                 # these are not compatibile with automatic precision scaling
+                # .training_step sets `self.current_train_metrics`
                 self.training_step(model=model, batch=batch, batch_idx=batch_idx)
-                if self.apply_gradient_clipping:
+                if self.apply_gradient_clipping:  # pragma: no cover <- this is tested
                     self.fabric.clip_gradients(
-                        module=model,  # type: ignore
+                        module=model,
                         optimizer=optimizer,
                         error_if_nonfinite=False,
-                        **self.gradient_clip_kwargs,  # type: ignore
+                        **self.gradient_clip_kwargs,
                     )
 
-                optimizer.step()
+                # optimizer.step() # TODO: model.optimizer_step() instead?
+                model.optimizer_step(
+                    epoch=self.current_epoch, batch_idx=batch_idx, optimizer=optimizer
+                )
 
                 self.apply_callback("on_before_zero_grad", optimizer=optimizer)
 
-                optimizer.zero_grad()
+                # optimizer.zero_grad()
+                model.optimizer_zero_grad(
+                    epoch=self.current_epoch, batch_idx=batch_idx, optimizer=optimizer
+                )
 
                 metrics = {
                     "epoch": self.current_epoch,
@@ -466,10 +538,17 @@ class CrossValidationTrainer:
 
         self.apply_callback("on_train_epoch_end_per_fold", output=output)
 
-    def training_step(self, model: ModelT, batch: Any, batch_idx: int) -> torch.Tensor:
-        outputs: MetricType = convert_output_to_dict(
-            model.training_step(batch, batch_idx=batch_idx)
-        )
+    def training_step(
+        self, model: LightningModule, batch: Any, batch_idx: int
+    ) -> torch.Tensor:
+        _outputs = model.training_step(batch, batch_idx=batch_idx)
+        if _outputs is None:
+            raise RuntimeError(
+                "It is currently expected that the model's training_step returns the loss and "
+                "optionally other metrics. Manual optimization is not currently supported."
+            )
+
+        outputs: MetricType = convert_output_to_dict(_outputs)
 
         loss = outputs["loss"]
 
@@ -487,7 +566,7 @@ class CrossValidationTrainer:
 
     def step_scheduler(
         self,
-        model: ModelT,
+        model: LightningModule,
         scheduler_cfg: Optional[SchedulerConfigT],
         level: Literal["step", "epoch"],
         current_value: int,
@@ -504,14 +583,23 @@ class CrossValidationTrainer:
         if current_value % cast(int, scheduler_cfg["frequency"]) != 0:
             return
 
-        if self.current_epoch == 0:
-            return
+        # if self.current_epoch == 0:
+        #     return
 
         # ONLY allow schedulers to step per epoch and keep all fold schedulers synced
-        # TODO: idk if this is wanted
+        # TODO: but this code is called from train_loop, which gives the option to step per batch
+        # not sure if it's best to allow LR to change each fold?
+        # I guess it's fine since each fold would always have its LR
+        # adjusted the same across experiments
+
+        if self.current_epoch == 0:
+            current_val_metrics = None
+        else:
+            current_val_metrics = self.current_val_metrics
+
         possible_monitor_vals = flatten_train_val_metrics(
             train_metrics=self.current_train_metrics,
-            val_metrics=self.current_val_metrics,
+            val_metrics=current_val_metrics,
             prepend_stage=True,
         )
 
@@ -526,7 +614,7 @@ class CrossValidationTrainer:
 
         # rely on model hook for actual step
         scheduler = cast(LRScheduler, scheduler_cfg["scheduler"])
-        model.lr_scheduler_step(scheduler, monitor)  # type: ignore
+        model.lr_scheduler_step(scheduler, monitor)
 
     @staticmethod
     def _limit_batches(n_batches: int, limit_batches: Number = 1.0) -> int:
@@ -541,12 +629,22 @@ class CrossValidationTrainer:
     @property
     def should_validate(self) -> bool:
         """Whether to currently run validation."""
-        return self.current_epoch % self.config.validation_frequency == 0
+        return self.should_do_something(
+            self.current_epoch, self.config.validation_frequency
+        )
+
+    def should_do_something(self, current_step_0_indexed: int, frequency: int) -> bool:
+        # if we want to do something with a frequency of 2 steps, then we need to check
+        # the +1 of the current 0-indexed step:
+        # step: 0 1 2 3 4 ...
+        # do  : F T F T F ...
+        # this prevents the first step (0) from always being True
+        return (current_step_0_indexed + 1) % frequency == 0
 
     @torch.no_grad()
     def val_loop(
         self,
-        model: ModelT,
+        model: LightningModule,
         val_loader: DataLoader,
         optimizer: Optimizer,
     ):
@@ -556,6 +654,7 @@ class CrossValidationTrainer:
             model: the LightningModule to evaluate
             val_loader: The dataloader yielding the validation batches.
         """
+        self.current_state = TrainerState.VALIDATING
 
         n_batches = len(val_loader)
         batch_limit = self._limit_batches(n_batches, self.config.limit_val_batches)
@@ -578,9 +677,14 @@ class CrossValidationTrainer:
                 current_fold=self.current_fold,
             )
 
-            out: MetricType = convert_output_to_dict(
-                model.validation_step(batch, batch_idx)
-            )
+            _out = model.validation_step(batch, batch_idx=batch_idx)
+            if _out is None:
+                raise RuntimeError(
+                    "The model's validation_step is expected to return the loss and "
+                    "optionally other metrics."
+                )
+
+            out: MetricType = convert_output_to_dict(_out)
 
             metrics = {
                 "epoch": self.current_epoch,
@@ -633,177 +737,40 @@ class CrossValidationTrainer:
 
         self.apply_callback("on_validation_end_per_fold")
 
-    def load(self, path: Path) -> FoldState:
-        """Loads a checkpoint from a given file into state.
-
-        Args:
-            state: a mapping containing model, optimizer and lr scheduler
-            path: the path to load the checkpoint from
-        """
-        state = dict()
-        remainder = self.fabric.load(path, state)
-        self.current_fold = remainder.pop("current_fold")
-        self.current_epoch = remainder.pop("current_epoch")
-        self.global_step_per_fold[self.current_fold] = remainder.pop("global_step")
-
-        if remainder:
-            raise RuntimeError(f"Unused Checkpoint Values: {remainder}")
-
-        return FoldState.model_validate(state)
-
-    def _keep_latest_checkpoints(self, paths: list[Path]) -> list[Path]:
-        import re
-        from operator import itemgetter
-
-        pattern = re.compile(r"epoch=(\d+)_fold=(\d+)")
-
-        path2ef = {
-            path: tuple(int(x) for x in match.groups())
-            for path in paths
-            if (match := pattern.search(path.name))
-        }
-        latest_epoch = max(path2ef.values(), key=itemgetter(0))[0]
-        latest_path2ef = {
-            path: (epoch, fold)
-            for path, (epoch, fold) in path2ef.items()
-            if epoch == latest_epoch
-        }
-
-        return sorted(latest_path2ef, key=latest_path2ef.__getitem__)
-
-    def load_all_folds(
-        self, checkpoint_dir: Path, ext: str = "ckpt"
-    ) -> dict[int, FoldState]:
-        paths = list(checkpoint_dir.glob(f"*.{ext}"))
-        ckpt_status: defaultdict[str, list[Path]] = defaultdict(list)
-        for path in paths:
-            name = path.name
-            if "training_complete" in name:
-                ckpt_status["timeout"].append(path)
-            elif "last" in name:
-                ckpt_status["last"].append(path)
-            else:
-                ckpt_status["default"].append(path)
-
-        fold_manager: dict[int, FoldState] = dict()
-        if ckpt_status["timeout"]:
-            for path in ckpt_status["timeout"]:
-                # TODO: load checkpoints AND finish remaining checkpoints
-                pass
-
-        for path in paths:
-            # this should set self.current_fold
-            state = self.load(path)
-            fold_manager[self.current_fold] = state
-        return fold_manager
-
-    def _save(
-        self,
-        state: FoldState,
-        fold: int = 0,
-        suffix: Optional[str] = None,
-        ext: str = "ckpt",
-        include_val_loss: bool = True,
-        **name_kwargs: Any,
-    ):
-        ser_state = state.model_dump()
-        ser_state.update(
-            global_step=self.global_step_per_fold[self.current_fold],
-            current_epoch=self.current_epoch,
-            current_fold=fold,
-        )
-
-        # use new dict for consistent key order
-        _name_kwargs = dict()
-        _name_kwargs["epoch"] = name_kwargs.get("epoch", self.current_epoch)
-        _name_kwargs["fold"] = name_kwargs.get("fold", fold)
-        if include_val_loss and not self.is_first_epoch:
-            _name_kwargs["loss"] = f"{self.current_val_metrics['loss']:.4f}"
-        else:
-            _name_kwargs.update(name_kwargs)
-
-        if suffix is not None:
-            _name_kwargs["suffix"] = suffix
-
-        # use suffix key as special nameless key
-        _name = "_".join(
-            f"{k}={v}" if k != "suffix" else str(v) for k, v in _name_kwargs.items()
-        )
-        name = f"{_name}.{ext}"
-        output = self.checkpoint_dir.joinpath(name)
-
-        self.fabric.save(output, ser_state)
-
-    def save(
-        self,
-        states: FoldState | Mapping[int, FoldState],
-        suffix: Optional[str] = None,
-        ext: str = "ckpt",
-        include_val_loss: bool = False,
-        **name_kwargs,
-    ):
-        """Saves a checkpoint to the ``checkpoint_dir``
-
-        Args:
-            state: A mapping containing model, optimizer and lr scheduler.
-        """
-        if isinstance(states, Mapping):
-            for fold, state in states.items():
-                self._save(
-                    state=state,
-                    fold=fold,
-                    suffix=suffix,
-                    ext=ext,
-                    include_val_loss=include_val_loss,
-                    **name_kwargs,
-                )
-        else:
-            self._save(
-                state=states,
-                suffix=suffix,
-                ext=ext,
-                include_val_loss=include_val_loss,
-                **name_kwargs,
-            )
-
-    @staticmethod
-    def get_latest_checkpoint(ckpt_dir: Path) -> Optional[Path]:
-        """Returns the latest checkpoint from the ``checkpoint_dir``
-
-        Args:
-            checkpoint_dir: the directory to search for checkpoints
-        """
-        if not ckpt_dir.is_dir():
-            return None
-
-        items = sorted(os.listdir(ckpt_dir))
-
-        if not items:
-            return None
-
-        return ckpt_dir.joinpath(items[-1])
-
     def _parse_optimizers_schedulers(
         self,
-        configure_optim_output: ConfigOptimizerOutput,
+        configure_optim_output: Union[OptimizerLRScheduler, Mapping],
     ) -> OptimizerConfigT:
+        # NOTE: none of this supports multiples optimizers or schedulers
+
+        # single optimizer
+        if isinstance(configure_optim_output, Optimizer):
+            return configure_optim_output, None
+
         _lr_sched_defaults = {
             "interval": "epoch",
             "frequency": 1,
             "monitor": self.config.monitor,
         }
 
-        # single optimizer
-        if isinstance(configure_optim_output, Optimizer):
-            return configure_optim_output, None
-
         # single lr scheduler config with optimizer passed
         if isinstance(configure_optim_output, Mapping):
             optimizer = configure_optim_output["optimizer"]
-            lr_scheduler = configure_optim_output.get("lr_scheduler", None)
+            lr_scheduler: KwargType = configure_optim_output.get("lr_scheduler", None)  # type: ignore
             if lr_scheduler is not None:
                 lr_scheduler = _lr_sched_defaults | lr_scheduler
             return optimizer, lr_scheduler
+
+        # tuple of optimizer and lr scheduler
+        # this would technically handle multiple optimizers and schedulers
+        if isinstance(configure_optim_output, tuple):
+            optimizer, lr_scheduler = configure_optim_output  # type: ignore
+
+            if isinstance(lr_scheduler, Mapping):
+                lr_scheduler = _lr_sched_defaults | lr_scheduler
+            else:
+                lr_scheduler = {"scheduler": lr_scheduler, **_lr_sched_defaults}
+            return optimizer, lr_scheduler  # type: ignore[return-value]
 
         raise ValueError(
             "Output of model.configure_optimizers() must be a torch.optim.Optimizer "
@@ -826,26 +793,11 @@ class CrossValidationTrainer:
 
     def log_status(self):
         if self.is_global_zero:
-            if self.status == StopReasons.NULL:
-                msg = f"COMPLETE: Training {self.config.max_epochs} epochs completed."
-            elif self.status == StopReasons.NO_IMPROVEMENT:
-                msg = (
-                    "EARLY STOP: Training stopped early due to no improvement in "
-                    f"{self.config.monitor}"
-                )
-            elif self.status == StopReasons.TIMEOUT:
-                msg = "TIMEOUT: Training stopped early due to running out of time."
-            elif self.status == StopReasons.LOSS_NAN_OR_INF:
-                msg = "NAN/INF: Training stopped early due to NaN or Inf loss."
-            elif self.status == StopReasons.PERFORMANCE_STALLED:
-                msg = (
-                    "STALLED: Training stopped early due to performance stalling. "
-                    f"{self.config.monitor} is not improving during the monitored stage."
-                )
-            else:
-                msg = (
-                    "PRUNED: Training stopped early due to bad trial pruning during "
-                    "hyperparameter tuning."
-                )
-
+            msg_template = self.status.message()
+            msg_kwargs = {
+                "max_epochs": self.config.max_epochs,
+                "monitor": self.config.monitor,
+            }
+            # str.format only takes what is needed
+            msg = msg_template.format(**msg_kwargs)
             logger.info(f"{msg}\n")
