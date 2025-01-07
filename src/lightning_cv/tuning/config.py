@@ -1,76 +1,106 @@
-from __future__ import annotations
+import sys
+from typing import Any, Literal, Optional, Union
+from warnings import warn
 
-from pathlib import Path
-from platform import python_version_tuple
-from typing import (
-    Annotated,
-    Any,
-    Generic,
-    Iterable,
-    Literal,
-    Optional,
-    Sequence,
-    TypeVar,
-)
+import attrs
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
-
-if python_version_tuple() >= ("3", "11", "0"):  # pragma: >=3.11 cover
+if sys.version_info >= (3, 11):  # pragma: >=3.11 cover
     import tomllib as tomli
 else:  # pragma: <3.11 cover
     import tomli
 
 from lightning_cv.tuning.utils import FrozenDict
-
-_T = TypeVar("_T")
-_U = TypeVar("_U")
+from lightning_cv.typehints import FilePath
+from lightning_cv.utils.dataclasses import AttrsDataclassUtilitiesMixin
 
 SuggestValues = Literal["int", "float", "categorical"]
 
 
-class Tunable(BaseModel):
+@attrs.define
+class Tunable(AttrsDataclassUtilitiesMixin):
     name: str
     suggest: SuggestValues
-    parent: Optional[str] = Field(None, description="parent for nested hparams")
+
+    def to_optuna_kwargs(self):
+        # only include fields that are passed to optuna.Trial.suggest_*
+        exclude = {"parent", "map", "suggest"}
+        return self.to_dict(exclude=exclude)
 
 
+@attrs.define
 class TunableInt(Tunable):
     suggest: Literal["int"]
     low: int
     high: int
     step: int = 1
+    parent: Optional[str] = None
 
 
+@attrs.define
 class TunableFloat(Tunable):
     suggest: Literal["float"]
     low: float
     high: float
     step: Optional[float] = None
     log: bool = False
+    parent: Optional[str] = None
 
 
-class TunableCategorical(Tunable, Generic[_T, _U]):
+@attrs.define
+class TunableCategorical(Tunable):
     suggest: Literal["categorical"]
-    choices: Sequence[_T]
-    map: Optional[dict[_T, _U]] = None
+    choices: list
+    map: Optional[dict] = None
+    parent: Optional[str] = None
 
 
-TunableType = Annotated[
-    TunableInt | TunableFloat | TunableCategorical[_T, _U],
-    Field(discriminator="suggest"),
-]
+TunableType = Union[TunableInt, TunableFloat, TunableCategorical]
 MappingT = dict[str, dict[str, dict[str, Any]]]
 
 
-class HparamConfig(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+def _forbidden_converter(value: Optional[list[dict]]) -> Optional[set[FrozenDict]]:
+    if value is None:
+        return None
 
+    return set(FrozenDict(**combo) for combo in value)
+
+
+@attrs.define
+class HparamConfig(AttrsDataclassUtilitiesMixin):
     hparams: list[TunableType]
-    forbidden: Optional[set[FrozenDict]]
+    forbidden: Optional[set[FrozenDict]] = attrs.field(
+        default=None, converter=_forbidden_converter
+    )
+    strict: bool = True
 
-    @field_validator("forbidden", mode="before")
-    def to_frozen(cls, values: Iterable[dict]) -> set[FrozenDict]:
-        return set(FrozenDict(value) for value in values)
+    def __attrs_post_init__(self):
+        if self.forbidden is not None:
+            hparam_names = set(hparam.name for hparam in self.hparams)
+            all_forbidden_hparams_subset_of_hparams = all(
+                forbidden_hparam_name in hparam_names
+                for forbidden in self.forbidden
+                for forbidden_hparam_name in forbidden.keys()
+            )
+
+            if not all_forbidden_hparams_subset_of_hparams:
+                msg = (
+                    "Forbidden hparams must be a subset of the hparams defined in the config."
+                    f" Received: {self.forbidden}"
+                )
+                if self.strict:
+                    raise ValueError(msg)
+                else:
+                    msg = f"WARNING: {msg}. This could lead to unexpected behavior if proceeding."
+                    warn(msg, RuntimeWarning)
+
+    @classmethod
+    def from_file(cls, file: FilePath, strict: bool = True):
+        with open(file, "rb") as fp:
+            config = tomli.load(fp)
+
+        config["strict"] = config.get("strict", strict)
+
+        return cls.from_dict(config)
 
     def mappings(self) -> MappingT:
         mapping = {
@@ -78,38 +108,19 @@ class HparamConfig(BaseModel):
             for hparam in self.hparams
             if isinstance(hparam, TunableCategorical) and hparam.map is not None
         }
+
         return mapping
 
-    def hparams_dict(self) -> dict[str, TunableType]:
-        return {h.name: h for h in self.hparams}
+    def hparams_dict(self):
+        return {hparam.name: hparam for hparam in self.hparams}
 
     def unique_forbidden_combos(self) -> Optional[list[tuple[str, ...]]]:
         if self.forbidden is None:
             return None
+
         return list(set(tuple(combo.keys()) for combo in self.forbidden))
 
 
-def load_config(file: str | Path, strict: bool = True) -> HparamConfig:
-    with open(file, "rb") as fp:
-        config = tomli.load(fp)
-
-    validated_config = HparamConfig.model_validate(config)
-
-    if strict and validated_config.forbidden is not None:
-        field_names = set(h.name for h in validated_config.hparams)
-
-        if not all(
-            name in field_names
-            for combo in validated_config.forbidden
-            for name in combo
-        ):
-            raise ValueError(
-                "Forbidden hparams must be a subset of the hparams defined in the config."
-            )
-
-    return validated_config
-
-
-def get_mappings(file: str | Path) -> MappingT:
-    config = load_config(file)
+def get_mappings(file: FilePath) -> MappingT:
+    config = HparamConfig.from_file(file)
     return config.mappings()
