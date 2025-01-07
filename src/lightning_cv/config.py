@@ -1,71 +1,66 @@
-from __future__ import annotations
-
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Literal, Optional, Union
 
-from lightning.fabric.accelerators.accelerator import Accelerator
-from lightning.fabric.loggers.logger import Logger
-from lightning.fabric.strategies.strategy import Strategy
+from attrs import define, field
+from lightning import LightningModule
 from lightning.fabric.wrappers import _FabricModule
-from pydantic import BaseModel, Field, validator
 from torch.optim import Optimizer
 
-from lightning_cv.callbacks.base import Callback
-from lightning_cv.typehints import ModelT, Number, SchedulerConfigT
+from lightning_cv.fabric import (
+    AcceleratorT,
+    CallbackT,
+    LoggerT,
+    PluginsT,
+    PrecisionT,
+    StrategyT,
+)
+from lightning_cv.typehints import Number, SchedulerConfigT
+from lightning_cv.utils.dataclasses import AttrsDataclassUtilitiesMixin
+from lightning_cv.utils.validators import (
+    limit_batches_validator,
+    non_negative_float,
+    non_negative_int,
+    positive_int,
+)
 
 
-class FoldState(BaseModel):
-    model: ModelT | _FabricModule
+@define
+class FoldState(AttrsDataclassUtilitiesMixin):
+    model: Union[LightningModule, _FabricModule]
     optimizer: Optimizer
     scheduler: Optional[SchedulerConfigT] = None
 
-    class Config:
-        arbitrary_types_allowed = True
 
-
-def validate_range(value: float, low: float, high: float):
-    if not (low <= value <= high):
-        raise ValueError(f"{value=} not in range [{low}, {high}]")
-
-
-Accelerators = Literal["auto", "cpu", "gpu", "tpu"]
-Strategies = Literal["ddp", "ddp_spawn", "ddp_notebook", "fsdp", "auto"]
-Precision = Literal["32", "16-mixed", "bf16-mixed"]
 GradClipAlgorithms = Literal["norm", "value"]
 
 
-class CrossValidationTrainerConfig(BaseModel):
-    accelerator: Accelerators | Accelerator = "auto"
-    strategy: Strategies | Strategy = "auto"
-    devices: list[int] | str | int = "auto"
-    precision: Precision | int = "32"
-    plugins: Optional[str | Any] = None
-    callbacks: Optional[list[Callback] | Callback] = None
-    loggers: Optional[Logger | list[Logger]] = None
-    max_epochs: int = 1000
-    grad_accum_steps: int = 1
+@define
+class CrossValidationTrainerConfig(AttrsDataclassUtilitiesMixin):
+    accelerator: AcceleratorT = "auto"
+    strategy: StrategyT = "auto"
+    devices: Union[int, str, list[int]] = "auto"
+    precision: PrecisionT = "32"
+    plugins: PluginsT = None
+    callbacks: CallbackT = None
+    loggers: LoggerT = None
+    max_epochs: int = field(default=1000, validator=positive_int)
+    grad_accum_steps: int = field(default=1, validator=positive_int)
     gradient_clip_algorithm: GradClipAlgorithms = "norm"
-    gradient_clip_val: float = Field(0.0, ge=0.0)
-    limit_train_batches: Number = 1.0
-    limit_val_batches: Number = 1.0
-    validation_frequency: int = 1
+    gradient_clip_val: float = field(default=0.0, validator=non_negative_float)
+    limit_train_batches: Number = field(
+        default=1.0,
+        validator=limit_batches_validator,  # type: ignore
+    )
+    limit_val_batches: Number = field(
+        default=1.0,
+        validator=limit_batches_validator,  # type: ignore
+    )
+    validation_frequency: int = field(default=1, validator=non_negative_int)
     use_distributed_sampler: bool = True
-    checkpoint_dir: Path = Path.cwd().joinpath("checkpoints")
-    checkpoint_frequency: int = 1
-    monitor: str = "val_loss"
-
-    @validator("limit_train_batches", "limit_val_batches", pre=True)
-    def validate_float_range(cls, value: Number) -> Number:
-        if not isinstance(value, int):
-            validate_range(value, low=0.0, high=1.0)
-        return value
-
-    @validator("monitor", pre=True)
-    def prepend_stage(cls, value: str) -> str:
-        if not value.startswith("val_"):
-            value = f"val_{value}"
-
-        return value
-
-    class Config:
-        arbitrary_types_allowed = True
+    checkpoint_dir: Path = field(
+        default=Path.cwd().joinpath("checkpoints"), converter=Path
+    )
+    checkpoint_frequency: int = field(default=1, validator=positive_int)
+    monitor: str = field(
+        default="val_loss", converter=lambda x: x if x.startswith("val") else f"val_{x}"
+    )
