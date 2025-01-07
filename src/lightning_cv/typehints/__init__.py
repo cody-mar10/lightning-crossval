@@ -1,54 +1,21 @@
-from __future__ import annotations
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Mapping, Optional, TypeVar, Union
 
-from typing import Any, Mapping, Optional
+if TYPE_CHECKING:
+    from lightning.fabric.utilities.types import LRScheduler
+    from torch import Tensor
+    from torch.optim import Optimizer
 
-from lightning.fabric.utilities.types import LRScheduler
-from torch import Tensor
-from torch.optim import Optimizer
+from lightning_cv.typehints.data import CVDataLoader, Stage
+from lightning_cv.typehints.module import ConfigOptimizerOutput
 
-from lightning_cv.split import (
-    CrossValidator,
-    CVIterator,
-    GroupCrossValidator,
-    Int64Array,
-)
-from lightning_cv.typehints.data import (
-    CrossValDataModuleT,
-    CVDataLoader,
-    DataclassInstance,
-    Stage,
-)
-from lightning_cv.typehints.module import ConfigOptimizerOutput, ModelConfig, ModelT
-
-Number = float | int
+Number = Union[float, int]
 KwargType = dict[str, Any]
-ForwardOutputType = Tensor | Mapping[str, Any]
-MetricType = dict[str, Tensor]
+MetricType = dict[str, "Tensor"]
 
-SchedulerConfigT = Mapping[str, LRScheduler | bool | str | int]
-OptimizerConfigT = tuple[Optimizer, Optional[SchedulerConfigT]]
+SchedulerConfigT = Mapping[str, Union["LRScheduler", bool, str, int]]
+OptimizerConfigT = tuple["Optimizer", Optional[SchedulerConfigT]]
 
+_T = TypeVar("_T")
 
-__all__ = [
-    # general types
-    "Number",
-    "KwargType",
-    "ForwardOutputType",
-    "MetricType",
-    "SchedulerConfigT",
-    "OptimizerConfigT",
-    # split types
-    "CrossValidator",
-    "CVIterator",
-    "GroupCrossValidator",
-    "Int64Array",
-    # data types
-    "CrossValDataModuleT",
-    "Stage",
-    "CVDataLoader",
-    "DataclassInstance",
-    # module types
-    "ModelConfig",
-    "ModelT",
-    "ConfigOptimizerOutput",
-]
+FilePath = Union[str, Path]
