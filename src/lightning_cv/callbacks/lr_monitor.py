@@ -1,16 +1,18 @@
-from __future__ import annotations
+from typing import TYPE_CHECKING
 
 from torch.optim import Optimizer
 
-import lightning_cv as lcv
-from lightning_cv.callbacks import Callback
+from lightning_cv.callbacks.base import Callback
 from lightning_cv.typehints import KwargType
+
+if TYPE_CHECKING:
+    from lightning_cv.trainer import CrossValidationTrainer
 
 
 class LearningRateMonitor(Callback):
     def on_before_log_metrics(
         self,
-        trainer: "lcv.CrossValidationTrainer",
+        trainer: "CrossValidationTrainer",
         metrics: KwargType,
         optimizer: Optimizer,
     ):

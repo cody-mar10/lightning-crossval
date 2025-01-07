@@ -1,14 +1,15 @@
-from __future__ import annotations
-
 import logging
-from typing import Callable, Literal, Optional
+from typing import TYPE_CHECKING, Callable, Literal, Optional
 
 import torch
 
-import lightning_cv as lcv
-from lightning_cv.callbacks import Callback
+from lightning_cv.callbacks.base import Callback
 from lightning_cv.typehints import MetricType
-from lightning_cv.utils import StopReasons
+from lightning_cv.utils.stopping import StopReasons
+
+if TYPE_CHECKING:
+    from lightning_cv.trainer import CrossValidationTrainer
+
 
 ComparisonOp = Callable[..., torch.Tensor]
 logger = logging.getLogger(__name__)
@@ -61,15 +62,15 @@ class EarlyStopping(Callback):
     def monitor_op(self) -> ComparisonOp:
         return self.mode_dict[self.mode]
 
-    def on_train_fold_end(self, trainer: "lcv.CrossValidationTrainer"):
+    def on_train_fold_end(self, trainer: "CrossValidationTrainer"):
         self._run_early_stopping_check(trainer)
 
-    def _run_early_stopping_check(self, trainer: "lcv.CrossValidationTrainer"):
+    def _run_early_stopping_check(self, trainer: "CrossValidationTrainer"):
         metrics = trainer.current_val_metrics
         current = self._get_current_metric(metrics)
         should_stop, reason = self._evaluate_stopping_criteria(current)
 
-        if trainer.is_distributed:
+        if trainer.is_distributed:  # pragma: no cover
             # stop if ANY processes decide to stop
             should_stop = trainer.fabric.strategy.reduce_boolean_decision(
                 should_stop, all=False
@@ -156,6 +157,6 @@ class EarlyStopping(Callback):
         return msg
 
     @staticmethod
-    def _log_info(trainer: "lcv.CrossValidationTrainer", message: str):
-        if trainer.is_global_zero:
+    def _log_info(trainer: "CrossValidationTrainer", message: str):
+        if trainer.is_global_zero:  # pragma: no cover
             logger.info(f"[rank: 0]: {message}")

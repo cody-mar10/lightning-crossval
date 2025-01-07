@@ -1,12 +1,14 @@
-from __future__ import annotations
-
 from statistics import mean, stdev
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
-import lightning_cv as lcv
 from lightning_cv.callbacks.base import Callback
-from lightning_cv.typehints import MetricType, ModelT
-from lightning_cv.utils import StopReasons
+from lightning_cv.typehints import MetricType
+from lightning_cv.utils.stopping import StopReasons
+
+if TYPE_CHECKING:
+    from lightning import LightningModule
+
+    from lightning_cv.trainer import CrossValidationTrainer
 
 
 class ValPerfPlateauMonitor(Callback):
@@ -51,11 +53,11 @@ class ValPerfPlateauMonitor(Callback):
         # the metric has not approached the min_metric
         return std <= self.threshold_std and mean > self.min_metric
 
-    def report(self, trainer: lcv.CrossValidationTrainer):
+    def report(self, trainer: "CrossValidationTrainer"):
         should_stop = self.should_stop()
 
         if should_stop:
-            if trainer.is_distributed:
+            if trainer.is_distributed:  # pragma: no cover
                 should_stop = trainer.fabric.strategy.reduce_boolean_decision(
                     should_stop, all=False
                 )
@@ -63,18 +65,18 @@ class ValPerfPlateauMonitor(Callback):
             trainer.status = StopReasons.PERFORMANCE_STALLED
 
     def on_validation_start_per_fold(
-        self, trainer: lcv.CrossValidationTrainer, model: ModelT, total: int
+        self, trainer: "CrossValidationTrainer", model: "LightningModule", total: int
     ):
         self.clear_metrics()
 
     def on_validation_batch_end_per_fold(
         self,
-        trainer: lcv.CrossValidationTrainer,
+        trainer: "CrossValidationTrainer",
         output: MetricType,
         batch,
         batch_idx: int,
     ):
         self.push_metric(output)
 
-    def on_validation_end_per_fold(self, trainer: lcv.CrossValidationTrainer):
+    def on_validation_end_per_fold(self, trainer: "CrossValidationTrainer"):
         self.report(trainer)

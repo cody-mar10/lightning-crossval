@@ -1,13 +1,15 @@
-from __future__ import annotations
-
 import time
 from datetime import timedelta
-from typing import Any, Literal, Optional
+from typing import TYPE_CHECKING, Any, Literal, Union
 
-import lightning_cv as lcv
-from lightning_cv.callbacks import Callback
+from lightning_cv.callbacks.base import Callback
+from lightning_cv.callbacks.utils import remove_old_checkpoints
 from lightning_cv.typehints import MetricType
-from lightning_cv.utils import StopReasons
+from lightning_cv.utils.stopping import StopReasons
+
+if TYPE_CHECKING:
+    from lightning_cv.trainer import CrossValidationTrainer
+
 
 Intervals = Literal["epoch", "step", "fold", "immediately"]
 
@@ -17,8 +19,8 @@ class Timer(Callback):
 
     def __init__(
         self,
-        duration: Optional[str | timedelta | dict[str, int]] = None,
-        buffer: Optional[timedelta | dict[str, int]] = None,
+        duration: Union[str, timedelta, dict[str, int], None] = None,
+        buffer: Union[timedelta, dict[str, int], None] = None,
         interval: Intervals = "immediately",
         save_latest: bool = True,
         training_only: bool = False,
@@ -83,22 +85,23 @@ class Timer(Callback):
             return False
         return self._elapsed_time() >= self._duration
 
-    def _check_time(self, trainer: "lcv.CrossValidationTrainer"):
+    def _check_time(self, trainer: "CrossValidationTrainer"):
         should_stop = self._is_time_up()
         self._stopped = should_stop
 
-        if trainer.is_distributed:
+        if trainer.is_distributed:  # pragma: no cover <- can't test distributed yet
             should_stop = trainer.fabric.strategy.reduce_boolean_decision(
                 should_stop, all=False
             )
 
         trainer.should_stop = trainer.should_stop or should_stop
-        if should_stop:
+        if should_stop:  # pragma: no cover <- this is actually tested
             trainer.status = StopReasons.TIMEOUT
 
-    def _check_time_and_checkpoint(self, trainer: "lcv.CrossValidationTrainer"):
+    def _check_time_and_checkpoint(self, trainer: "CrossValidationTrainer"):
         self._check_time(trainer)
         if trainer.should_stop and self._save_latest:
+            remove_old_checkpoints(trainer.checkpoint_dir, "*latest*.ckpt")
             save_kwargs: dict[str, Any] = dict(suffix="latest", include_val_loss=False)
             for fold, state in trainer.fold_manager.items():
                 save_kwargs["states"] = state
@@ -113,10 +116,10 @@ class Timer(Callback):
 
     def _validate_interval_and_check(
         self,
-        trainer: "lcv.CrossValidationTrainer",
-        interval: set[Intervals] | Intervals,
+        trainer: "CrossValidationTrainer",
+        interval: Union[set[Intervals], Intervals],
     ):
-        if isinstance(interval, str):
+        if isinstance(interval, str):  # pragma: no cover
             interval = {interval}
 
         if self._interval not in interval:
@@ -127,21 +130,21 @@ class Timer(Callback):
             # could start upper level loops and save again
             self._check_time_and_checkpoint(trainer)
 
-    def on_train_fold_start(self, trainer: "lcv.CrossValidationTrainer"):
+    def on_train_fold_start(self, trainer: "CrossValidationTrainer"):
         self._current_fold_training_complete = False
 
-    def on_train_fold_end(self, trainer: "lcv.CrossValidationTrainer"):
+    def on_train_fold_end(self, trainer: "CrossValidationTrainer"):
         self._validate_interval_and_check(trainer, {"fold", "immediately"})
 
     def on_train_epoch_end_per_fold(
-        self, trainer: "lcv.CrossValidationTrainer", output: MetricType
+        self, trainer: "CrossValidationTrainer", output: MetricType
     ):
         self._current_fold_training_complete = True
         self._validate_interval_and_check(trainer, {"epoch", "immediately"})
 
     def on_train_batch_end_per_fold(
         self,
-        trainer: "lcv.CrossValidationTrainer",
+        trainer: "CrossValidationTrainer",
         output: MetricType,
         batch,
         batch_idx: int,
@@ -150,7 +153,7 @@ class Timer(Callback):
 
     def on_validation_batch_end_per_fold(
         self,
-        trainer: "lcv.CrossValidationTrainer",
+        trainer: "CrossValidationTrainer",
         output: MetricType,
         batch,
         batch_idx: int,
@@ -158,7 +161,7 @@ class Timer(Callback):
         if self._check_during_validation:
             self._validate_interval_and_check(trainer, {"step", "immediately"})
 
-    def on_validation_end_per_fold(self, trainer: "lcv.CrossValidationTrainer"):
+    def on_validation_end_per_fold(self, trainer: "CrossValidationTrainer"):
         if self._check_during_validation:
             self._validate_interval_and_check(trainer, {"epoch", "immediately"})
 

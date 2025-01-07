@@ -1,15 +1,18 @@
-from __future__ import annotations
+from typing import TYPE_CHECKING
 
-import lightning_cv as lcv
-from lightning_cv.callbacks import Callback
-from lightning_cv.typehints import ModelT
+from lightning_cv.callbacks.base import Callback
+
+if TYPE_CHECKING:
+    from lightning import LightningModule
+
+    from lightning_cv.trainer import CrossValidationTrainer
 
 
 class TrainMode(Callback):
     def on_train_epoch_start_per_fold(
         self,
-        trainer: "lcv.CrossValidationTrainer",
-        model: ModelT,
+        trainer: "CrossValidationTrainer",
+        model: "LightningModule",
         total: int,
         current_epoch: int,
         current_fold: int,
@@ -19,6 +22,6 @@ class TrainMode(Callback):
 
 class EvalMode(Callback):
     def on_validation_start_per_fold(
-        self, trainer: "lcv.CrossValidationTrainer", model: ModelT, total: int
+        self, trainer: "CrossValidationTrainer", model: "LightningModule", total: int
     ):
         model.eval()
