@@ -1,72 +1,45 @@
-from __future__ import annotations
-
-from abc import ABCMeta, abstractmethod, abstractproperty
-from typing import Iterator, Protocol, overload, runtime_checkable
+from abc import ABCMeta, abstractmethod
 
 import numpy as np
-from numpy.typing import NDArray
 
-Int64Array = NDArray[np.int64]
-CVIterator = Iterator[tuple[Int64Array, Int64Array]]
-
-
-@runtime_checkable
-class CrossValidator(Protocol):
-    @overload
-    def split(self) -> CVIterator:
-        ...
-
-    @overload
-    def split(self, X, y, groups) -> CVIterator:
-        ...
-
-    @overload
-    def get_n_splits(self) -> int:
-        ...
-
-    @overload
-    def get_n_splits(self, X, y, groups) -> CVIterator:
-        ...
-
-
-@runtime_checkable
-class GroupCrossValidator(CrossValidator, Protocol):
-    @property
-    def train_group_ids(self) -> list[int]:
-        ...
-
-    @property
-    def val_group_id(self) -> int:
-        ...
+from lightning_cv.typehints.split import CVIterator, Int64Array
 
 
 class BaseCrossValidator(metaclass=ABCMeta):
-    """Simpler CV iterface than sklearn"""
+    """Simpler CV iterface than sklearn. Only `split` and `get_n_splits` methods are required.
+
+    The `split` method should yield a tuple of train and validation index arrays. It also takes
+    no arguments, so it is recommended for the needed data to be passed in during initialization.
+    """
 
     def get_X_index(self, X: Int64Array) -> Int64Array:
         n = X.shape[0]
         return np.arange(n)
 
     @abstractmethod
-    def split(self) -> CVIterator:
-        ...
+    def split(self) -> CVIterator: ...
 
     @abstractmethod
-    def get_n_splits(self) -> int:
-        ...
+    def get_n_splits(self) -> int: ...
 
 
 class BaseGroupCrossValidator(BaseCrossValidator):
-    @abstractproperty
-    def train_group_ids(self) -> list[int]:
-        ...
 
-    @abstractproperty
-    def val_group_id(self) -> int:
-        ...
+    @property
+    @abstractmethod
+    def train_group_ids(self) -> list[int]: ...
+
+    @property
+    @abstractmethod
+    def val_group_id(self) -> int: ...
 
 
 class ImbalancedLeaveOneGroupOut(BaseGroupCrossValidator):
+    """Group-based CV splitter. It is a variant of LeaveOneGroupOut where the validation set
+    does not contain the most frequent group. The usecase is for highly imbalanced datasets
+    in which the largest group substantially more frequent than the rest of the groups.
+    """
+
     def __init__(self, groups: Int64Array) -> None:
         # only keep track of data indices for each fold
         self.X_idx = self.get_X_index(groups)
@@ -114,7 +87,6 @@ class ImbalancedLeaveOneGroupOut(BaseGroupCrossValidator):
     def get_n_splits(self) -> int:
         return self.n_folds
 
-    # TODO: this needs to wrap index style splitters like sklearn's
     def split(self) -> CVIterator:
         for fold_idx, group_id in enumerate(self.uniq_groups):
             if fold_idx == 0:
