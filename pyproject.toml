@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lightning-cv"
-version = "0.5.0"
+version = "1.0.0"
 authors = [{ name = "Cody Martin", email = "codycmar10@gmail.com" }]
 description = "Cross validation using Lightning Fabric"
 readme = "README.md"
@@ -15,10 +15,19 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
 ]
 
-dependencies = ["torch>=2", "lightning>=2", "pydantic>=2,<2.1", "boltons"]
+dependencies = [
+    "torch>=2",
+    "lightning>=2",
+    "boltons",
+    "attrs>=24.2",
+    "cattrs>=24.1",
+]
 
 [project.optional-dependencies]
-tune = ["optuna>=3.1"]
+tune = ["optuna>=3.1", 'tomli; python_version <"3.11"']
+test = ["pytest>=8.3", "pytest-cov", "scikit-learn"]
+build = ["ruff", "mypy", "isort", "covdefaults"]
+dev = ["lightning-cv[build]", "lightning-cv[test]"]
 
 [project.urls]
 "Homepage" = "https://github.com/cody-mar10/lightning-crossval"
@@ -34,5 +43,17 @@ line-length = 90
 [tool.coverage.run]
 plugins = ["covdefaults"]
 
+[tool.coverage.report]
+fail_under = 80
+exclude_also = ["def __repr__"]
+
 [tool.setuptools.package-data]
 lightning_cv = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit", "tests/integration"]
+filterwarnings = [
+    # ignore lightning warnings since it is a 3rd party lib
+    "ignore:.*pkg_resources.declare_namespace",
+    "ignore:.*pkg_resources is deprecated:DeprecationWarning",
+]
